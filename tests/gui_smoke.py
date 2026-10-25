@@ -107,7 +107,8 @@ with tempfile.TemporaryDirectory() as directory:
         window.reproject_dialog()
         wait()
     assert Path(projected).is_file()
-    assert window.selected()["layer"].path == projected
+    opened_path = window.selected()["layer"].path
+    assert Path(opened_path).samefile(projected), (opened_path, projected)
     checks.append("reprojection dialog saves and opens result")
     map_file = str(Path(directory)/"gui-map.png")
     with patch("geoquickview.app.W.QDialog.exec", return_value=W.QDialog.DialogCode.Accepted), \
