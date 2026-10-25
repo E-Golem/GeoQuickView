@@ -169,7 +169,11 @@ def dimension_label(path, variable, dim, index):
 def query_nc(layer, selection, x, y):
     grid = grid_info(layer.path, selection["variable"])
     if reference(grid["wkt"]) and reference(grid["wkt"]).IsGeographic():
-        x = (x+180) % 360-180
+        left, right = grid["extent"][0], grid["extent"][2]
+        if np.isclose(right-left, 360):
+            x = (x-left) % 360 + left
+        elif not left <= x <= right:
+            x = (x+180) % 360-180
     if not (grid["extent"][0] <= x <= grid["extent"][2] and grid["extent"][1] <= y <= grid["extent"][3]):
         return {"位置": "图层范围外"}
     col, row = int(np.argmin(abs(grid["x"]-x))), int(np.argmin(abs(grid["y"]-y)))

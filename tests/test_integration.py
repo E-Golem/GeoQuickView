@@ -216,5 +216,13 @@ class GeoIntegration(unittest.TestCase):
             self.assertAlmostEqual(stats["最大值"], 251.)
 
 
+    def test_global_netcdf_edge_cells_are_queryable_across_longitude_wrap(self):
+        layer = inspect(self.files["nc"])
+        for longitude in (-182.4, 177.6, 537.6):
+            result = query(layer, layer.selection, longitude, -5, layer.wkt)
+            self.assertEqual(result["原始列"], 36)
+            self.assertAlmostEqual(result["物理值"], 258.28)
+
+
 if __name__ == "__main__":
     unittest.main()

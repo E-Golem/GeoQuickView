@@ -58,6 +58,14 @@ with tempfile.TemporaryDirectory() as directory:
     window.style_changed()
     assert window.selected()["style"]["lower"] == 280
     checks.append("manual colour limits")
+    from unittest.mock import patch
+    previous_crs = window.target
+    with patch("geoquickview.app.W.QInputDialog.getText", return_value=("EPSG:3857", True)), \
+         patch("geoquickview.app.change_extent", side_effect=ValueError("test invalid domain")):
+        window.choose_crs()
+    assert window.target == previous_crs
+    assert errors.pop() == "test invalid domain"
+    checks.append("failed map projection leaves previous CRS intact")
     window.layers.currentItem().setCheckState(QtCore.Qt.CheckState.Unchecked)
     wait()
     window.style_changed()

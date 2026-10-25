@@ -589,7 +589,14 @@ class MainWindow(W.QMainWindow):
                                                  text="EPSG:4326")
         if accepted and value:
             try:
-                self.target = reference(value).ExportToWkt()
+                candidate = reference(value).ExportToWkt()
+                entry = self.selected()
+                if entry:
+                    source, bounds = layer_space(entry["layer"], entry["selection"])
+                    if not source or bounds is None:
+                        raise ValueError("当前图层的空间参照未知，无法转换地图坐标系。")
+                    change_extent(bounds, source, candidate)
+                self.target = candidate
                 self.crs_label.setText("地图视图 · "+crs_name(self.target))
                 self.fit_current()
             except Exception as exc:
@@ -598,6 +605,8 @@ class MainWindow(W.QMainWindow):
     def request_render(self):
         self.generation += 1
         self.render_pending = True
+        if self.entries:
+            self.map_note.setText("正在更新预览…")
         self.render_timer.start()
 
     def render_scene(self):
