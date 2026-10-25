@@ -45,8 +45,22 @@ with tempfile.TemporaryDirectory(prefix="GeoQuickView-portable-") as temporary:
     assert (output/"map.png").stat().st_size > 5000
     assert (output/"map.pdf").read_bytes().startswith(b"%PDF")
     report["checks"].append("backend, projections, formats and PNG/PDF export")
+    from scipy.io import netcdf_file
+    import numpy as np
+    classic = output/"samples"/"经典气象.nc"
+    with netcdf_file(classic, "w", version=2) as data:
+        data.createDimension("lat", 4)
+        data.createDimension("lon", 8)
+        for name, values, units in (("lat", np.arange(20, 24), "degrees_north"),
+                                    ("lon", np.arange(100, 108), "degrees_east")):
+            coordinate = data.createVariable(name, "f8", (name,))
+            coordinate[:] = values
+            coordinate.units = units
+        variable = data.createVariable("temperature", "f4", ("lat", "lon"))
+        variable[:] = np.arange(32, dtype=np.float32).reshape(4, 8)+270
+        variable.units = "K"
     for name, files in (("raster-vector", [output/"samples"/"demo_monthly.tif", output/"samples"/"demo_boundary.geojson"]),
-                        ("netcdf", [output/"samples"/"demo_weather.nc"])):
+                        ("netcdf", [output/"samples"/"demo_weather.nc"]), ("netcdf3", [classic])):
         screenshot = output/f"ui-{name}.png"
         run(["--smoke-test", screenshot, *files])
         ui = json.loads(screenshot.with_suffix(".json").read_text(encoding="utf-8"))
