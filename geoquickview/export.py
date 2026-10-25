@@ -106,6 +106,8 @@ def export_map(entries, extent, wkt, destination, title="研究区地图", width
                           interpolation="nearest", zorder=index+1)
                 if frame.data.ndim == 2:
                     scalar = (ScalarMappable(Normalize(lo, hi), colormaps[colour]), frame.unit, layer.name)
+                else:
+                    scalar = None
             else:
                 first = True
                 for geometry in frame.geometries:

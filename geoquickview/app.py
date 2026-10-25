@@ -664,6 +664,7 @@ class MainWindow(W.QMainWindow):
             entry["shown_metadata"]["当前预览抽样值范围（物理值）"] = summary
             item = getattr(self, "preview_property", None)
             if item is not None:
+                item.setText(1, f"{len(summary)} 项")
                 item.takeChildren()
                 for key, value in summary.items():
                     W.QTreeWidgetItem(item, [key, str(value)])
@@ -981,6 +982,7 @@ class MainWindow(W.QMainWindow):
         if frame is None or frame.data is None:
             return {"状态": "未生成栅格预览"}
         values = frame.data[np.isfinite(frame.data)]
-        return {"模式": "当前视窗抽样，未扫描全量", "有限样本": int(values.size),
+        count = np.isfinite(frame.data).all(axis=-1).sum() if frame.data.ndim == 3 else values.size
+        return {"模式": "预览图像统计，未扫描源数据全量", "有效预览像素": int(count),
                 "最小值": float(values.min()) if values.size else None,
                 "最大值": float(values.max()) if values.size else None}

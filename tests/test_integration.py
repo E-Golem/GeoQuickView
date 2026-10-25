@@ -224,5 +224,15 @@ class GeoIntegration(unittest.TestCase):
             self.assertAlmostEqual(result["物理值"], 258.28)
 
 
+    def test_rgb_overlay_does_not_export_an_unrelated_scalar_colorbar(self):
+        from matplotlib.figure import Figure
+        layer = inspect(self.files["raster"])
+        entries = [(layer, {"bands": [1]}, {"lower": 278, "upper": 330}),
+                   (layer, {"bands": [1, 2, 3]}, {"lower": 278, "upper": 330})]
+        with patch.object(Figure, "colorbar") as colorbar:
+            export_map(entries, layer.extent, layer.wkt, self.root/"rgb-overlay.png", dpi=100)
+            colorbar.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
