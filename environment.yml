@@ -1,0 +1,18 @@
+name: geoquickview
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy
+  - gdal>=3.8
+  - libgdal-netcdf
+  - libgdal-hdf5
+  - pyside6>=6.6
+  - pyqtgraph>=0.13
+  - xarray>=2025.1
+  - netcdf4
+  - matplotlib
+  - cartopy
+  - pyproj
+  - pyinstaller
+  - pip
