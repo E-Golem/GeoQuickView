@@ -83,13 +83,23 @@ def inspect_nc(path):
                             "属性": dict(var.attrs)}
                      for name, var in ds.variables.items()}
         choices = [name for name in ds.data_vars if ds[name].ndim >= 2 and np.issubdtype(ds[name].dtype, np.number)]
-        if not choices:
-            raise ValueError("NC 文件没有可显示的二维或更高维数值变量。")
+        preferred = None
+        for name in choices:
+            try:
+                xn, _ = _axis(ds, ds[name], "x")
+                yn, _ = _axis(ds, ds[name], "y")
+                if xn and yn and _grid(ds, name)["wkt"]:
+                    preferred = name
+                    break
+            except ValueError:
+                continue
         metadata = {"文件": path, "磁盘大小（字节）": Path(path).stat().st_size, "格式": "NetCDF",
                     "维度": dict(ds.sizes), "数据变量数量": len(ds.data_vars), "全局属性": dict(ds.attrs), "变量": variables}
-        selection = {"variable": choices[0], "indices": {}}
+        selection = {"variable": preferred or (choices[0] if choices else None), "indices": {}}
         try:
-            grid = _grid(ds, choices[0])
+            if selection["variable"] is None:
+                raise ValueError("没有二维数值变量，当前仅查看属性。")
+            grid = _grid(ds, selection["variable"])
             wkt, extent = grid["wkt"], grid["extent"]
             metadata["定位状态"] = "规则网格" if wkt else "空间参照未知，使用原坐标/数组坐标"
         except ValueError as exc:

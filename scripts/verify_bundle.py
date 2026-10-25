@@ -8,6 +8,8 @@ import zipfile
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+import geoquickview
 archives = sorted((ROOT/"dist").glob("GeoQuickView-*-windows-x64.zip"), key=lambda p: p.stat().st_mtime)
 if not archives:
     raise SystemExit("Build the portable zip first.")
@@ -59,12 +61,20 @@ with tempfile.TemporaryDirectory(prefix="GeoQuickView-portable-") as temporary:
         variable = data.createVariable("temperature", "f4", ("lat", "lon"))
         variable[:] = np.arange(32, dtype=np.float32).reshape(4, 8)+270
         variable.units = "K"
-    for name, files in (("raster-vector", [output/"samples"/"demo_monthly.tif", output/"samples"/"demo_boundary.geojson"]),
-                        ("netcdf", [output/"samples"/"demo_weather.nc"]), ("netcdf3", [classic])):
+    from tests.nc_cases import nc_cases
+    cases = nc_cases(output/"samples")
+    for name, files, expected in (
+            ("raster-vector", [output/"samples"/"demo_monthly.tif", output/"samples"/"demo_boundary.geojson"], 2),
+            ("netcdf", [output/"samples"/"demo_weather.nc"], 1), ("netcdf3", [classic], 1),
+            ("auxiliary", [Path(cases["auxiliary"])], 1), ("metadata", [Path(cases["profile"])], 0)):
         screenshot = output/f"ui-{name}.png"
         run(["--smoke-test", screenshot, *files])
         ui = json.loads(screenshot.with_suffix(".json").read_text(encoding="utf-8"))
-        assert not ui["errors"] and ui["rendered"] == len(files), ui
+        assert not ui["errors"] and ui["rendered"] == expected and ui["attributes_displayed"], ui
+        if name == "auxiliary":
+            assert ui["selections"][0]["variable"] == "temperature", ui
+        if name == "metadata":
+            assert ui["metadata_only"] == 1, ui
         report["checks"].append({name: ui})
         import shutil
         shutil.copy2(screenshot, artifact/f"portable-{name}.png")

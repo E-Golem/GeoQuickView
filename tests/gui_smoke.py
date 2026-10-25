@@ -8,7 +8,7 @@ import tempfile
 import time
 
 import geoquickview
-from PySide6 import QtCore, QtGui, QtWidgets as W, QtTest
+from PySide6 import QtCore, QtGui, QtWidgets as W
 from geoquickview.app import MainWindow
 from geoquickview.data import inspect
 from geoquickview.samples import create_samples
@@ -28,13 +28,17 @@ window.show_error = errors.append
 window.show()
 checks = []
 
-def wait():
+def wait(owner=None):
+    owner = owner or window
     deadline = time.monotonic()+25
     while time.monotonic() < deadline:
         application.processEvents()
-        QtTest.QTest.qWait(25)
-        if not window.jobs and not window.rendering and not window.render_timer.isActive():
+        time.sleep(.025)  # Release the GIL so Python worker imports can make progress.
+        if not owner.jobs and not owner.rendering and not owner.render_timer.isActive():
             return
+    import faulthandler
+    faulthandler.dump_traceback()
+    print("STATE", len(owner.jobs), owner.rendering, owner.render_pending, owner.status.currentMessage(), errors, flush=True)
     raise AssertionError("Qt worker timeout")
 
 with tempfile.TemporaryDirectory() as directory:
@@ -97,6 +101,43 @@ with tempfile.TemporaryDirectory() as directory:
     wait()
     assert "要素数" in window.query_text.toPlainText()
     checks.append("background exact statistics")
+    projected = str(Path(directory)/"gui-reprojected.gpkg")
+    with patch("geoquickview.app.W.QDialog.exec", return_value=W.QDialog.DialogCode.Accepted), \
+         patch("geoquickview.app.W.QFileDialog.getSaveFileName", return_value=(projected, "GeoPackage")):
+        window.reproject_dialog()
+        wait()
+    assert Path(projected).is_file()
+    assert window.selected()["layer"].path == projected
+    checks.append("reprojection dialog saves and opens result")
+    map_file = str(Path(directory)/"gui-map.png")
+    with patch("geoquickview.app.W.QDialog.exec", return_value=W.QDialog.DialogCode.Accepted), \
+         patch("geoquickview.app.W.QFileDialog.getSaveFileName", return_value=(map_file, "PNG")), \
+         patch("geoquickview.app.W.QMessageBox.information", return_value=W.QMessageBox.StandardButton.Ok):
+        window.export_dialog()
+        wait()
+    assert Path(map_file).stat().st_size > 5000
+    checks.append("map export dialog writes PNG")
+    from tests.nc_cases import nc_cases
+    cases = nc_cases(directory)
+    standalone = MainWindow()
+    standalone.show_error = errors.append
+    standalone.show()
+    standalone.add_layer(inspect(cases["auxiliary"]))
+    wait(standalone)
+    assert standalone.selector.currentText() == "temperature"
+    standalone.selector.setCurrentText("auxiliary")
+    wait(standalone)
+    assert not standalone.target and standalone.selected()["frame"] is not None
+    standalone.selector.setCurrentText("temperature")
+    wait(standalone)
+    assert standalone.target and standalone.selected()["frame"] is not None
+    standalone.close()
+    checks.append("NC variable switching keeps geographic and index coordinates separate")
+    window.add_layer(inspect(cases["profile"]))
+    wait()
+    assert not window.selector.isEnabled()
+    assert "temperature" in window.selected()["shown_metadata"]["变量"]
+    checks.append("metadata-only NetCDF opens without a renderable variable")
     output = Path("artifacts/gui-controls.png")
     output.parent.mkdir(exist_ok=True)
     window.grab().save(str(output))

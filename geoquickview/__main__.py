@@ -93,11 +93,16 @@ def main():
                 window.grab().save(str(output))
                 report = {"errors": errors, "layers": len(window.entries),
                           "rendered": sum(entry["frame"] is not None for entry in window.entries.values()),
+                          "metadata_only": sum(entry["layer"].kind == "nc" and not entry["selection"].get("variable")
+                                               for entry in window.entries.values()),
+                          "attributes_displayed": window.properties.topLevelItemCount() > 0,
+                          "selections": [entry["selection"] for entry in window.entries.values()],
                           "elapsed_ms": elapsed.elapsed()}
                 output.with_suffix(".json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
                 timer.stop()
                 window.close()
-                app.exit(1 if errors or not report["rendered"] else 0)
+                metadata_valid = report["layers"] > 0 and report["metadata_only"] == report["layers"] and report["attributes_displayed"]
+                app.exit(1 if errors or not (report["rendered"] or metadata_valid) else 0)
         timer.timeout.connect(check)
         timer.start()
     return app.exec()

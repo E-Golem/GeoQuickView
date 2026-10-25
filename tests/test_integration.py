@@ -234,5 +234,27 @@ class GeoIntegration(unittest.TestCase):
             colorbar.assert_not_called()
 
 
+    def test_nc_prefers_spatial_data_over_auxiliary_arrays(self):
+        from tests.nc_cases import nc_cases
+        with tempfile.TemporaryDirectory() as directory:
+            cases = nc_cases(directory)
+            layer = inspect(cases["auxiliary"])
+            self.assertEqual(layer.selection["variable"], "temperature")
+            self.assertTrue(reference(layer.wkt).IsGeographic())
+            self.assertTrue(np.isfinite(render(layer, edge=64).data).any())
+            with self.assertRaises(ValueError):
+                render(layer, target="", edge=64)
+
+    def test_netcdf_without_2d_data_still_opens_attributes(self):
+        from tests.nc_cases import nc_cases
+        with tempfile.TemporaryDirectory() as directory:
+            layer = inspect(nc_cases(directory)["profile"])
+            self.assertEqual(layer.choices, [])
+            self.assertEqual(layer.metadata["维度"]["time"], 3)
+            self.assertEqual(layer.metadata["变量"]["temperature"]["属性"]["units"], "K")
+            with self.assertRaisesRegex(ValueError, "属性"):
+                render(layer, edge=64)
+
+
 if __name__ == "__main__":
     unittest.main()

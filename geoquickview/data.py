@@ -185,6 +185,8 @@ def layer_space(layer, selection=None):
     layer.verify_source()
     selection = selection or layer.selection
     if layer.kind == "nc":
+        if not selection.get("variable"):
+            return "", None
         from .nc import grid_info
         grid = grid_info(layer.path, selection["variable"])
         return grid["wkt"], grid["extent"]
@@ -225,12 +227,14 @@ def _warp_frame(ds, extent, target, edge, scaled=True):
                  unit=ds.GetRasterBand(1).GetUnitType())
 
 
-def render(layer, selection=None, target="", extent=None, edge=1536):
+def render(layer, selection=None, target=None, extent=None, edge=1536):
     selection = selection or layer.selection
     wkt, bounds = layer_space(layer, selection)
+    if layer.kind == "nc" and not selection.get("variable"):
+        raise ValueError("没有二维数值变量，当前仅查看属性。")
+    target = wkt if target is None else target
     if bool(wkt) != bool(target):
-        if target:
-            raise ValueError("图层缺少坐标系，无法与已定位的地图叠加。")
+        raise ValueError("有空间参照与未知空间参照的图层不能在同一坐标画布中叠加。")
     extent = extent or change_extent(bounds, wkt, target)
     if extent is None:
         raise ValueError("图层没有可用范围。")
@@ -282,6 +286,8 @@ def _point_count(geometry):
 
 
 def query(layer, selection, x, y, map_wkt):
+    if layer.kind == "nc" and not selection.get("variable"):
+        return {"说明": "此文件没有二维数值变量，当前仅查看属性。"}
     wkt, _ = layer_space(layer, selection)
     if map_wkt and wkt:
         x, y, _ = osr.CoordinateTransformation(reference(map_wkt), reference(wkt)).TransformPoint(x, y)
@@ -326,6 +332,8 @@ def exact_statistics(layer, selection, cancel=None, progress=None):
         src = ds.GetLayerByName(selection["layer"])
         return {"要素数": src.GetFeatureCount(force=1), "范围": src.GetExtent(force=1)}
     if layer.kind == "nc":
+        if not selection.get("variable"):
+            raise ValueError("精确栅格统计需要先选择一个二维变量；此文件可查看属性。")
         from .nc import statistics_nc
         return statistics_nc(layer, selection, cancel, progress)
     ds = _selected_raster(layer, selection)

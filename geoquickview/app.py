@@ -439,6 +439,8 @@ class MainWindow(W.QMainWindow):
         layer, selection, style = entry["layer"], entry["selection"], entry["style"]
         self.active_label.setText(layer.name)
         self.selector.addItems(layer.choices)
+        self.selector.setEnabled(bool(layer.choices))
+        self.selector.setPlaceholderText("" if layer.choices else "无二维变量，仅查看属性")
         if layer.kind == "raster":
             self.selector.setCurrentIndex(selection["bands"][0]-1)
             self.rgb_widget.show()
@@ -449,10 +451,10 @@ class MainWindow(W.QMainWindow):
         elif layer.kind == "vector":
             self.selector.setCurrentText(selection["layer"])
         else:
-            self.selector.setCurrentText(selection["variable"])
+            self.selector.setCurrentText(selection.get("variable") or "")
             try:
                 from .nc import grid_info
-                grid = grid_info(layer.path, selection["variable"])
+                grid = grid_info(layer.path, selection["variable"]) if selection.get("variable") else {"extra": {}}
                 for dim, size in grid["extra"].items():
                     spin = W.QSpinBox()
                     spin.setRange(0, size-1)
@@ -491,7 +493,7 @@ class MainWindow(W.QMainWindow):
         md = deepcopy(entry["layer"].metadata)
         if entry["layer"].kind == "raster":
             md["当前波段属性"] = band_info(entry["layer"].path, entry["selection"]["bands"][0])
-        if entry["layer"].kind == "nc":
+        if entry["layer"].kind == "nc" and entry["selection"].get("variable"):
             md["当前变量属性"] = md["变量"][entry["selection"]["variable"]]
             md["当前切片索引"] = entry["selection"].get("indices", {})
             from .nc import grid_info
@@ -507,6 +509,8 @@ class MainWindow(W.QMainWindow):
             from .nc import dimension_label
             md["当前切片坐标"] = {d: dimension_label(entry["layer"].path, entry["selection"]["variable"], d, i)
                                   for d, i in entry["selection"].get("indices", {}).items()}
+        if entry["layer"].kind == "nc" and not entry["selection"].get("variable"):
+            md["地图预览"] = "没有二维数值变量；全部文件属性仍可查看和复制。"
         frame = entry["frame"]
         summary = self.preview_summary(entry)
         if entry["layer"].kind != "vector":
@@ -547,7 +551,17 @@ class MainWindow(W.QMainWindow):
                                   "indices": old.get("indices", {}) if old["variable"] == self.selector.currentText() else {}}
         entry["style"]["lower"] = entry["style"]["upper"] = None
         entry["frame"] = None
+        self.paint_entry(entry)
         self.populate_selection()
+        if kind == "nc" and len(self.entries) == 1:
+            try:
+                wkt, _ = layer_space(entry["layer"], entry["selection"])
+                if bool(wkt) != bool(self.target):
+                    self.target = wkt
+                    self.crs_label.setText("地图视图 · "+crs_name(self.target))
+                self.fit_current()
+            except ValueError as exc:
+                self.map_note.setText(str(exc))
         self.request_render()
 
     def dimension_changed(self, dim, value):
