@@ -9,10 +9,13 @@ description = "Offline desktop quick-look viewer for geospatial rasters, NetCDF 
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
-dependencies = ["numpy", "GDAL>=3.8", "PySide6>=6.6", "pyqtgraph>=0.13", "xarray>=2025.1", "netCDF4", "matplotlib", "cartopy", "pyproj"]
+dependencies = ["numpy", "GDAL>=3.8", "PySide6>=6.6", "pyqtgraph>=0.13", "xarray>=2025.1", "h5netcdf", "h5py", "scipy", "cftime", "matplotlib", "cartopy", "pyproj"]
 
 [project.gui-scripts]
 geoquickview = "geoquickview.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["geoquickview*"]
+
+[tool.setuptools.package-data]
+geoquickview = ["assets/*"]

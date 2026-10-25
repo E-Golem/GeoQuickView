@@ -4,13 +4,19 @@ channels:
 dependencies:
   - python=3.12
   - numpy
+  - libblas=*=*openblas
+  - libcblas=*=*openblas
+  - liblapack=*=*openblas
   - gdal>=3.8
   - libgdal-netcdf
   - libgdal-hdf5
   - pyside6>=6.6
   - pyqtgraph>=0.13
   - xarray>=2025.1
-  - netcdf4
+  - h5netcdf
+  - h5py
+  - scipy
+  - cftime
   - matplotlib
   - cartopy
   - pyproj

@@ -1,0 +1,51 @@
+name: Windows portable build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          activate-environment: geoquickview
+          environment-file: environment.yml
+          channels: conda-forge
+          channel-priority: strict
+          auto-activate: false
+          conda-solver: libmamba
+      - name: Core integration and GUI controls
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          conda run --no-capture-output -n geoquickview python -m unittest discover -s tests -v
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          conda run --no-capture-output -n geoquickview python -m tests.gui_smoke
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build and verify standalone exe
+        shell: pwsh
+        run: |
+          conda run --no-capture-output -n geoquickview python scripts/build_windows.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          conda run --no-capture-output -n geoquickview python scripts/verify_bundle.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: GeoQuickView-windows-x64
+          path: dist/GeoQuickView-*-windows-x64.zip
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: verification
+          path: |
+            artifacts/*.json
+            artifacts/*.png
+          retention-days: 14
