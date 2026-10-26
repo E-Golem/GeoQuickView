@@ -2,6 +2,7 @@ name: Windows portable build
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 concurrency:
@@ -11,6 +12,8 @@ permissions:
   contents: read
 jobs:
   windows:
+    permissions:
+      contents: write
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -41,7 +44,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: GeoQuickView-windows-x64
-          path: dist/GeoQuickView-*-windows-x64.zip
+          path: |
+            dist/GeoQuickView-*-windows-x64.zip
+            dist/SHA256SUMS.txt
           retention-days: 30
           if-no-files-found: error
       - uses: actions/upload-artifact@v7
@@ -52,3 +57,14 @@ jobs:
             artifacts/*.json
             artifacts/*.png
           retention-days: 14
+      - name: Publish verified version to GitHub Releases
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $report = Get-Content artifacts/build-report.json -Raw | ConvertFrom-Json
+          if ($env:RELEASE_TAG -ne "v$($report.version)") { throw "Tag must match the verified application version" }
+          gh release create $env:RELEASE_TAG $report.archive dist/SHA256SUMS.txt --verify-tag --title "GeoQuickView $env:RELEASE_TAG" --notes-file "docs/releases/$env:RELEASE_TAG.md"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

@@ -255,6 +255,20 @@ class GeoIntegration(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "属性"):
                 render(layer, edge=64)
 
+    def test_bundled_province_basemap_is_offline_and_projectable(self):
+        from geoquickview.data import change_extent
+        path = Path(geoquickview.__file__).with_name("assets")/"china_provinces.gpkg"
+        layer = inspect(path)
+        self.assertEqual(layer.kind, "vector")
+        self.assertEqual(exact_statistics(layer, layer.selection)["要素数"], 34)
+        self.assertTrue(reference(layer.wkt).IsProjected())
+        target = reference("EPSG:4326").ExportToWkt()
+        extent = change_extent(layer.extent, layer.wkt, target)
+        with patch("socket.create_connection", side_effect=AssertionError("network forbidden")):
+            frame = render(layer, target=target, extent=extent, edge=512)
+        self.assertEqual(len(frame.geometries), 34)
+        self.assertNotIn("不完整", frame.note)
+
 
 if __name__ == "__main__":
     unittest.main()

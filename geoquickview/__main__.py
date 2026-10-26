@@ -97,6 +97,9 @@ def main():
                                                for entry in window.entries.values()),
                           "attributes_displayed": window.properties.topLevelItemCount() > 0,
                           "selections": [entry["selection"] for entry in window.entries.values()],
+                          "basemap_rendered": bool(window.basemap_items),
+                          "axes_visible": window.axes_enabled.isChecked(),
+                          "repository_button": window.repository_button.text(),
                           "elapsed_ms": elapsed.elapsed()}
                 output.with_suffix(".json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
                 timer.stop()

@@ -1,6 +1,7 @@
 """Build a reproducible Windows portable directory and zip from a conda environment."""
 from pathlib import Path
 import json
+import hashlib
 import os
 import shutil
 import sys
@@ -87,7 +88,10 @@ def main():
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
         for path in files:
             bundle.write(path, path.relative_to(DIST))
-    report = {"version": __version__, "python": sys.version, "files": len(files),
+    with archive.open("rb") as stream:
+        checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+    (DIST/"SHA256SUMS.txt").write_text(f"{checksum}  {archive.name}\n", encoding="utf-8")
+    report = {"sha256": checksum, "version": __version__, "python": sys.version, "files": len(files),
               "unpacked_bytes": sum(p.stat().st_size for p in files),
               "zip_bytes": archive.stat().st_size, "archive": str(archive),
               "license_records": len(records), "license_records_with_files": sum(bool(r["license_files"]) for r in records)}

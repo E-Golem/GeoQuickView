@@ -71,6 +71,9 @@ with tempfile.TemporaryDirectory(prefix="GeoQuickView-portable-") as temporary:
         run(["--smoke-test", screenshot, *files])
         ui = json.loads(screenshot.with_suffix(".json").read_text(encoding="utf-8"))
         assert not ui["errors"] and ui["rendered"] == expected and ui["attributes_displayed"], ui
+        assert not ui["axes_visible"] and "GitHub" in ui["repository_button"], ui
+        if name == "raster-vector":
+            assert ui["basemap_rendered"], ui
         if name == "auxiliary":
             assert ui["selections"][0]["variable"] == "temperature", ui
         if name == "metadata":

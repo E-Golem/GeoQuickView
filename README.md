@@ -6,7 +6,9 @@ Windows 离线地理数据快看工具。拖入一个文件，查看属性、空
 
 ## 运行
 
-可在 [Windows 构建页面](https://github.com/E-Golem/GeoQuickView/actions/workflows/windows.yml) 的成功任务中下载 GeoQuickView-windows-x64 构建产物。
+优先在 [GitHub Releases](https://github.com/E-Golem/GeoQuickView/releases/latest) 下载最新便携包与 SHA-256 校验文件。
+
+也可在 [Windows 构建页面](https://github.com/E-Golem/GeoQuickView/actions/workflows/windows.yml) 的成功任务中下载 GeoQuickView-windows-x64 构建产物。
 
 使用 Windows 64 位便携包时，解压整个目录，双击其中的 **GeoQuickView.exe**。无需安装 Python、Conda、QGIS 或 ArcGIS。也可以把数据拖到窗口，或通过 Windows“打开方式”选择该程序。
 
@@ -26,10 +28,12 @@ python -m geoquickview
 python -m geoquickview "D:\data\image.tif" "D:\data\weather.nc"
 ~~~
 
-## 0.1 功能
+## 0.2 功能
 
 | 模块 | 已实现 |
 | --- | --- |
+| 界面 | 属性列可调整、横向滚动、双击查看可复制全文；坐标轴默认关闭并可切换；地图缩放设上下限；GitHub 仓库按钮 |
+| 底图 | 默认显示内置中国省界，可开关；随地图坐标系转换，未知坐标系时自动隐藏；出图可包含省界 |
 | 属性 | 坐标系及完整 WKT、范围、X/Y 分辨率、宽高、数据类型、波段/变量、单位、缩放、NoData、已有统计、矢量字段 |
 | 栅格 | 单波段伪彩色、RGB、波段切换、色带/拉伸、透明度、直方图、缩放平移、原始分辨率像元查询 |
 | NC | 变量切换、按实际维度生成切片控件、CF 时间/日历标签、0–360 经度转换、纬度方向、缩放与缺失值 |
@@ -53,7 +57,7 @@ python -m geoquickview "D:\data\image.tif" "D:\data\weather.nc"
 - 矢量预览会简化线条，最多 50,000 个要素或 1,000,000 个顶点；触及上限会明确提示显示不完整。导出地图遇到截断时拒绝生成不完整图，需缩小范围。
 - 查询原始像元而非预览插值值。当前矢量查询返回点击附近最多 10 个要素；不提供拓扑编辑。
 - 输出使用新文件名，避免意外覆盖。独立裁剪、格式转换、重采样和缺失值处理工具按需求安排到后续版本。
-- 基础流程不调用在线底图或自动下载边界。边界由用户加载；演示数据是合成数据。
+- 基础流程不调用在线底图或自动下载边界。内置省界来自用户提供的“中国标准地图-审图号GS(2020)4619号-shp格式/省界.shp”，保留原始几何与北京 1954 Lambert 坐标系；也可加载自己的边界。演示数据是合成数据。
 
 ## 验证与打包
 
@@ -65,7 +69,7 @@ python scripts\build_windows.py
 python scripts\verify_bundle.py
 ~~~
 
---self-check 输出目录应使用新目录名。打包产生 dist\GeoQuickView\GeoQuickView.exe 和 dist\GeoQuickView-0.1.0-windows-x64.zip。
+--self-check 输出目录应使用新目录名。打包产生 dist\GeoQuickView\GeoQuickView.exe 和 dist\GeoQuickView-0.2.0-windows-x64.zip。
 
 详见 [验证说明](docs/VALIDATION.md)、[需求及开源调研](docs/planning.md)。测试样例由代码生成，不随仓库上传真实科研数据、虚拟环境或缓存。Windows GitHub Actions 工作流负责测试、打包与便携包自检。
 
@@ -73,4 +77,4 @@ python scripts\verify_bundle.py
 
 Python 3.12、PySide6、GDAL/OGR、xarray/h5netcdf/SciPy、NumPy/PyQtGraph、Matplotlib/Cartopy。查看与出图使用同一组图层、切片、范围与颜色参数。
 
-本项目源码采用 MIT；第三方组件保留各自许可证。发行目录提供 THIRD_PARTY_NOTICES.txt、完整版本/来源记录及包内提供的许可文本。TuiView、viewtif、ncvue、FlashViewer、EOmaps、QGIS 为前期设计调研参考，本项目未复制它们的应用实现。
+本项目源码采用 MIT；第三方组件和用户提供的省界数据保留各自权利，省界数据不因随包提供而改用 MIT。来源记录见 geoquickview/assets/china_provinces.source.json。发行目录提供 THIRD_PARTY_NOTICES.txt、完整版本/来源记录及包内提供的许可文本。TuiView、viewtif、ncvue、FlashViewer、EOmaps、QGIS 为前期设计调研参考，本项目未复制它们的应用实现。

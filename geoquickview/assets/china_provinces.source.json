@@ -1,0 +1,25 @@
+{
+  "name": "中国省界",
+  "source_map": "中国标准地图-审图号GS(2020)4619号-shp格式",
+  "source_file": "省界.shp",
+  "supplied_by": "用户提供，用于 GeoQuickView 内置省界底图",
+  "conversion": "Shapefile 转 GeoPackage，保留原始几何、属性与坐标系，未重投影或简化",
+  "source_files": {
+    "省界.shp": {
+      "bytes": 455348,
+      "sha256": "b89de3b67a122518be66e6391d52870e435d30e32cf2657cfca37b9658e303fb"
+    },
+    "省界.shx": {
+      "bytes": 372,
+      "sha256": "e4b547fa89accfff0362879c0a5246b31b37ca7c885f766ac0d6a286547b3693"
+    },
+    "省界.dbf": {
+      "bytes": 78614,
+      "sha256": "3064483a18a6d70d533f7c790d6eab5dedce190d20a4400d6c2df61abb5c3dea"
+    },
+    "省界.prj": {
+      "bytes": 458,
+      "sha256": "7a2314e3e103d759e87808c5296c809496f3ad74066389af8eda731992080985"
+    }
+  }
+}

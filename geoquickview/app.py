@@ -12,9 +12,12 @@ from PySide6 import QtCore, QtGui, QtWidgets as W
 import pyqtgraph as pg
 
 from . import __version__
+
 from .data import (inspect, render, query, layer_space, change_extent, crs_name,
                    reference, band_info, exact_statistics, reproject, Cancelled, coordinate_unit)
 from .display import limits, rgba, geometry_parts
+
+REPOSITORY_URL = "https://github.com/E-Golem/GeoQuickView"
 
 pg.setConfigOptions(imageAxisOrder="row-major", background="#edf2f5", foreground="#607183", antialias=True)
 
@@ -58,6 +61,8 @@ class MainWindow(W.QMainWindow):
         self.pool.setMaxThreadCount(2)
         self.jobs = set()
         self.entries = {}
+        self.basemap = inspect(Path(__file__).with_name("assets") / "china_provinces.gpkg")
+        self.basemap_items = []
         self.target = ""
         self.generation = 0
         self.rendering = False
@@ -71,6 +76,8 @@ class MainWindow(W.QMainWindow):
         self._build()
         self._style()
         self._menus()
+        self.populate_selection()
+        self.show_basemap_home()
 
     def _build(self):
         root = W.QWidget()
@@ -89,9 +96,11 @@ class MainWindow(W.QMainWindow):
         sub.setObjectName("subtitle")
         bar.addWidget(sub)
         bar.addStretch()
-        badge = W.QLabel("●  离线桌面版")
-        badge.setObjectName("badge")
-        bar.addWidget(badge)
+        self.repository_button = W.QPushButton("GitHub 仓库 ↗")
+        self.repository_button.setObjectName("repository")
+        self.repository_button.setToolTip(REPOSITORY_URL)
+        self.repository_button.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(REPOSITORY_URL)))
+        bar.addWidget(self.repository_button)
         outer.addWidget(header)
         toolbar = W.QWidget()
         tools = W.QHBoxLayout(toolbar)
@@ -148,6 +157,14 @@ class MainWindow(W.QMainWindow):
         self.crs_label.setObjectName("section")
         map_bar.addWidget(self.crs_label)
         map_bar.addStretch()
+        self.basemap_enabled = W.QCheckBox("中国省界")
+        self.basemap_enabled.setChecked(True)
+        self.basemap_enabled.setToolTip("内置用户提供的省界；无空间参照的数据不叠加底图。")
+        self.basemap_enabled.toggled.connect(self.basemap_changed)
+        map_bar.addWidget(self.basemap_enabled)
+        self.axes_enabled = W.QCheckBox("坐标轴")
+        self.axes_enabled.toggled.connect(self.toggle_axes)
+        map_bar.addWidget(self.axes_enabled)
         crs_button = W.QPushButton("地图坐标系…")
         crs_button.clicked.connect(self.choose_crs)
         map_bar.addWidget(crs_button)
@@ -172,11 +189,12 @@ class MainWindow(W.QMainWindow):
         self.stack.addWidget(welcome)
         self.canvas = pg.PlotWidget()
         self.canvas.setAspectLocked(True)
-        self.canvas.showGrid(x=True, y=True, alpha=.1)
+        self.canvas.showGrid(x=False, y=False)
         self.canvas.setMenuEnabled(False)
         self.canvas.getPlotItem().hideButtons()
         self.canvas.setLabel("bottom", "X")
         self.canvas.setLabel("left", "Y")
+        self.toggle_axes(False)
         self.canvas.getViewBox().sigRangeChanged.connect(lambda *_: self.request_render())
         self.canvas.scene().sigMouseClicked.connect(self.map_clicked)
         self.canvas.scene().sigMouseMoved.connect(self.mouse_moved)
@@ -225,9 +243,17 @@ class MainWindow(W.QMainWindow):
         self.tabs = W.QTabWidget()
         self.properties = W.QTreeWidget()
         self.properties.setHeaderLabels(["属性", "值"])
-        self.properties.setColumnWidth(0, 125)
+        self.properties.header().setStretchLastSection(False)
+        self.properties.header().setMinimumSectionSize(160)
+        self.properties.header().setSectionResizeMode(W.QHeaderView.ResizeMode.Interactive)
+        self.properties.setColumnWidth(0, 260)
+        self.properties.setColumnWidth(1, 360)
+        self.properties.setTextElideMode(QtCore.Qt.TextElideMode.ElideNone)
+        self.properties.setHorizontalScrollMode(W.QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.properties.setAlternatingRowColors(True)
-        self.properties.setWordWrap(True)
+        self.properties.setWordWrap(False)
+        self.properties.itemExpanded.connect(lambda _: self.properties.resizeColumnToContents(0))
+        self.properties.itemDoubleClicked.connect(self.property_details)
         self.tabs.addTab(self.properties, "属性")
         appearance = W.QWidget()
         style_layout = W.QVBoxLayout(appearance)
@@ -268,11 +294,14 @@ class MainWindow(W.QMainWindow):
         self.query_text.setPlaceholderText("单击地图，读取原始分辨率的像元值或附近要素。")
         self.tabs.addTab(self.query_text, "查询")
         right_layout.addWidget(self.tabs, 1)
+        details_button = W.QPushButton("查看选中属性全文…")
+        details_button.clicked.connect(self.property_details)
+        right_layout.addWidget(details_button)
         copy_button = W.QPushButton("复制完整属性")
         copy_button.clicked.connect(self.copy_properties)
         right_layout.addWidget(copy_button)
         splitter.addWidget(right)
-        splitter.setSizes([240, 850, 350])
+        splitter.setSizes([220, 720, 500])
         splitter.setStretchFactor(1, 1)
         self.status = W.QStatusBar()
         self.setStatusBar(self.status)
@@ -295,7 +324,7 @@ class MainWindow(W.QMainWindow):
         QWidget#header {background: #122c3b;}
         QLabel#brand {color: #f2fbfb; font-size: 23px; font-weight: 700;}
         QLabel#subtitle {color: #b4c7cf; padding-left: 15px;}
-        QLabel#badge {color: #77dec4; background: #204151; border-radius: 10px; padding: 6px 12px;}
+        QPushButton#repository {color: #d7f6ee; background: #204151; border-color: #356071;}
         QLabel#section {font-size: 14px; font-weight: 600; padding: 4px 0 9px;}
         QLabel#muted {color: #718397; font-size: 11px;}
         QPushButton {background: #f4f7fa; border: 1px solid #dce5ec; border-radius: 6px; padding: 8px 12px;}
@@ -433,6 +462,7 @@ class MainWindow(W.QMainWindow):
         self.dimension_labels = {}
         self.rgb_widget.hide()
         if not entry:
+            self.selector.setEnabled(False)
             self.active_label.setText("数据详情")
             self.properties.clear()
             return
@@ -483,6 +513,12 @@ class MainWindow(W.QMainWindow):
         self.populate_properties()
         self.update_histogram()
         self.update_legend()
+        try:
+            wkt, bounds = layer_space(layer, selection)
+            if bounds and bool(wkt) == bool(self.target):
+                self.update_zoom_limits(change_extent(bounds, wkt, self.target))
+        except ValueError:
+            pass
 
     def populate_properties(self):
         self.properties.clear()
@@ -516,17 +552,8 @@ class MainWindow(W.QMainWindow):
         if entry["layer"].kind != "vector":
             md["当前预览抽样值范围（物理值）"] = summary
         entry["shown_metadata"] = md
-        def add(parent, key, value):
-            if isinstance(value, dict):
-                item = W.QTreeWidgetItem(parent, [str(key), f"{len(value)} 项"])
-                for k, v in value.items():
-                    add(item, k, v)
-            else:
-                text = json.dumps(value, ensure_ascii=False, default=str) if isinstance(value, (list, tuple)) else str(value if value is not None else "未提供")
-                item = W.QTreeWidgetItem(parent, [str(key), text])
-                item.setToolTip(1, text)
         for key, value in md.items():
-            add(self.properties, key, value)
+            self.add_property(self.properties, key, value)
         self.properties.expandToDepth(0)
         for index in range(self.properties.topLevelItemCount()):
             item = self.properties.topLevelItem(index)
@@ -534,6 +561,45 @@ class MainWindow(W.QMainWindow):
                 self.preview_property = self.properties.takeTopLevelItem(index)
                 self.properties.insertTopLevelItem(0, self.preview_property)
                 self.preview_property.setExpanded(True)
+        self.properties.resizeColumnToContents(0)
+
+    def add_property(self, parent, key, value):
+        if isinstance(value, dict):
+            text = text_json(value)
+        elif isinstance(value, (list, tuple)):
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        else:
+            text = str(value if value is not None else "未提供")
+        item = W.QTreeWidgetItem(parent, [str(key), f"{len(value)} 项" if isinstance(value, dict) else text])
+        item.setToolTip(0, str(key))
+        item.setToolTip(1, text)
+        item.setData(0, QtCore.Qt.ItemDataRole.UserRole, text)
+        if isinstance(value, dict):
+            for k, v in value.items():
+                self.add_property(item, k, v)
+        return item
+
+    def property_details(self, item=None, column=0):
+        item = item if isinstance(item, W.QTreeWidgetItem) else self.properties.currentItem()
+        entry = self.selected()
+        if item is None and not entry:
+            return
+        dialog = W.QDialog(self)
+        dialog.setWindowTitle("属性全文 · "+(item.text(0) if item else "全部属性"))
+        dialog.resize(800, 520)
+        layout = W.QVBoxLayout(dialog)
+        name = W.QLabel(item.text(0) if item else entry["layer"].name)
+        name.setWordWrap(True)
+        layout.addWidget(name)
+        content = W.QPlainTextEdit()
+        content.setReadOnly(True)
+        content.setLineWrapMode(W.QPlainTextEdit.LineWrapMode.NoWrap)
+        content.setPlainText(item.data(0, QtCore.Qt.ItemDataRole.UserRole) if item else text_json(entry["shown_metadata"]))
+        layout.addWidget(content)
+        buttons = W.QDialogButtonBox(W.QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def selection_changed(self, *_):
         entry = self.selected()
@@ -581,6 +647,8 @@ class MainWindow(W.QMainWindow):
     def fit_current(self):
         entry = self.selected()
         if not entry:
+            if self.basemap_enabled.isChecked():
+                self.show_basemap_home()
             return
         try:
             wkt, bounds = layer_space(entry["layer"], entry["selection"])
@@ -592,11 +660,93 @@ class MainWindow(W.QMainWindow):
             if bounds[0] == bounds[2] or bounds[1] == bounds[3]:
                 pad = max(abs(bounds[0]), abs(bounds[1]), 1)*.01
                 bounds = (bounds[0]-pad, bounds[1]-pad, bounds[2]+pad, bounds[3]+pad)
+            self.update_zoom_limits(bounds)
             self.canvas.disableAutoRange()
             self.canvas.setRange(xRange=(bounds[0], bounds[2]), yRange=(bounds[1], bounds[3]), padding=.025)
             self.request_render()
         except Exception as exc:
             self.map_note.setText(str(exc))
+
+    def update_zoom_limits(self, bounds):
+        span = max(bounds[2]-bounds[0], bounds[3]-bounds[1], 1e-9)
+        entry = self.selected()
+        pixels = 4096
+        if entry and entry["layer"].kind == "raster":
+            pixels = max(entry["layer"].metadata["宽 × 高"])
+        elif entry and entry["layer"].kind == "nc" and entry["selection"].get("variable"):
+            from .nc import grid_info
+            try:
+                grid = grid_info(entry["layer"].path, entry["selection"]["variable"])
+                pixels = max(len(grid["x"]), len(grid["y"]))
+            except ValueError:
+                pass
+        minimum = span / max(pixels, 64) * 4
+        maximum = span * 4
+        if self.target and self.basemap_enabled.isChecked():
+            try:
+                base = change_extent(self.basemap.extent, self.basemap.wkt, self.target)
+                maximum = max(maximum, (base[2]-base[0])*4, (base[3]-base[1])*4)
+            except ValueError:
+                pass
+        self.canvas.getViewBox().setLimits(minXRange=minimum, minYRange=minimum,
+                                           maxXRange=maximum, maxYRange=maximum)
+
+    def toggle_axes(self, enabled):
+        for axis in ("bottom", "left"):
+            self.canvas.getPlotItem().showAxis(axis, enabled)
+        self.canvas.showGrid(x=enabled, y=enabled, alpha=.1)
+
+    def show_basemap_home(self):
+        self.target = self.basemap.wkt
+        self.stack.setCurrentIndex(1 if self.basemap_enabled.isChecked() else 0)
+        self.crs_label.setText("地图视图 · "+crs_name(self.target))
+        self.update_zoom_limits(self.basemap.extent)
+        x0, y0, x1, y1 = self.basemap.extent
+        self.canvas.disableAutoRange()
+        self.canvas.setRange(xRange=(x0, x1), yRange=(y0, y1), padding=.025)
+        self.request_render()
+
+    def basemap_changed(self, enabled):
+        for item in self.basemap_items:
+            item.setVisible(enabled and bool(self.target))
+        if not self.entries:
+            self.show_basemap_home()
+        elif self.selected():
+            try:
+                wkt, bounds = layer_space(self.selected()["layer"], self.selected()["selection"])
+                if bounds:
+                    self.update_zoom_limits(change_extent(bounds, wkt, self.target))
+            except ValueError:
+                pass
+        self.request_render()
+
+    def paint_basemap(self, frame):
+        for item in self.basemap_items:
+            self.canvas.removeItem(item)
+        self.basemap_items = []
+        if frame is None:
+            return
+        path = QtGui.QPainterPath()
+        path.setFillRule(QtCore.Qt.FillRule.OddEvenFill)
+        for geometry in frame.geometries:
+            for kind, values in geometry_parts(geometry):
+                if kind != "point" and len(values):
+                    path.moveTo(float(values[0, 0]), float(values[0, 1]))
+                    for x, y in values[1:]:
+                        path.lineTo(float(x), float(y))
+                    path.closeSubpath()
+        # Background fill stays below data; thin province boundaries remain visible above rasters.
+        fill = W.QGraphicsPathItem(path)
+        fill.setPen(pg.mkPen(None))
+        fill.setBrush(pg.mkBrush("#e4e9ed"))
+        fill.setZValue(-100)
+        border = W.QGraphicsPathItem(path)
+        border.setPen(pg.mkPen("#64748b", width=1))
+        border.setZValue(1000000)
+        for item in (fill, border):
+            self.canvas.addItem(item)
+            item.setVisible(self.basemap_enabled.isChecked() and bool(self.target))
+            self.basemap_items.append(item)
 
     def choose_crs(self):
         value, accepted = W.QInputDialog.getText(self, "地图坐标系", "输入 EPSG 代码、PROJ 定义或 WKT：",
@@ -610,9 +760,17 @@ class MainWindow(W.QMainWindow):
                     if not source or bounds is None:
                         raise ValueError("当前图层的空间参照未知，无法转换地图坐标系。")
                     change_extent(bounds, source, candidate)
+                elif self.basemap_enabled.isChecked():
+                    change_extent(self.basemap.extent, self.basemap.wkt, candidate)
                 self.target = candidate
                 self.crs_label.setText("地图视图 · "+crs_name(self.target))
-                self.fit_current()
+                if entry:
+                    self.fit_current()
+                else:
+                    bounds = change_extent(self.basemap.extent, self.basemap.wkt, candidate)
+                    self.update_zoom_limits(bounds)
+                    self.canvas.setRange(xRange=(bounds[0], bounds[2]), yRange=(bounds[1], bounds[3]), padding=.025)
+                    self.request_render()
             except Exception as exc:
                 self.show_error(str(exc))
 
@@ -624,13 +782,17 @@ class MainWindow(W.QMainWindow):
         self.render_timer.start()
 
     def render_scene(self):
-        if self.rendering or not self.entries:
+        if self.rendering or (not self.entries and not self.basemap_enabled.isChecked()):
             return
         self.rendering = True
         self.render_pending = False
         generation = self.generation
         extent, target = self.current_extent(), self.target
         snapshot = [(entry["key"], entry["layer"], deepcopy(entry["selection"])) for entry in self.visible()]
+        if self.basemap_enabled.isChecked() and target:
+            snapshot.insert(0, ("basemap", self.basemap, self.basemap.selection))
+        else:
+            self.paint_basemap(None)
         def calculate(cancel, progress):
             result = []
             for key, layer, selection in snapshot:
@@ -660,6 +822,10 @@ class MainWindow(W.QMainWindow):
                     item.hide()
         notes = []
         for key, frame, error in frames:
+            if key == "basemap":
+                self.paint_basemap(frame)
+                notes.append("中国省界底图"+ ("："+error if error else ""))
+                continue
             if key not in self.entries:
                 continue
             entry = self.entries[key]
@@ -681,7 +847,9 @@ class MainWindow(W.QMainWindow):
                 item.setText(1, f"{len(summary)} 项")
                 item.takeChildren()
                 for key, value in summary.items():
-                    W.QTreeWidgetItem(item, [key, str(value)])
+                    self.add_property(item, key, value)
+                item.setToolTip(1, text_json(summary))
+                item.setData(0, QtCore.Qt.ItemDataRole.UserRole, text_json(summary))
 
     def paint_entry(self, entry):
         for item in entry["items"]:
@@ -799,9 +967,7 @@ class MainWindow(W.QMainWindow):
         self.populate_selection()
         self.request_render()
         if not self.entries:
-            self.target = ""
-            self.stack.setCurrentIndex(0)
-            self.crs_label.setText("地图视图")
+            self.show_basemap_home()
 
     def mouse_moved(self, position):
         if self.canvas.sceneBoundingRect().contains(position):
@@ -891,7 +1057,7 @@ class MainWindow(W.QMainWindow):
                      ready, "正在重投影…", heavy=True)
 
     def export_dialog(self):
-        if not self.visible():
+        if not self.visible() and not (self.basemap_enabled.isChecked() and self.target):
             return
         dialog = W.QDialog(self)
         dialog.setWindowTitle("通用研究区地图")
@@ -939,6 +1105,8 @@ class MainWindow(W.QMainWindow):
             return
         entries = [(entry["layer"], deepcopy(entry["selection"]), deepcopy(entry["style"]))
                    for entry in self.visible() if boundaries.isChecked() or entry["layer"].kind != "vector"]
+        if boundaries.isChecked() and self.basemap_enabled.isChecked() and self.target:
+            entries.append((self.basemap, self.basemap.selection, {"line": "#64748b", "opacity": 1.}))
         if not entries:
             self.show_error("没有可导出的图层。")
             return
@@ -963,6 +1131,7 @@ class MainWindow(W.QMainWindow):
         event.acceptProposedAction()
 
     def closeEvent(self, event):
+        self.render_timer.stop()
         for job in self.jobs:
             job.cancel.set()
         if not self.pool.waitForDone(3000):

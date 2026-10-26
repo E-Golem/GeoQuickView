@@ -41,12 +41,58 @@ def wait(owner=None):
     print("STATE", len(owner.jobs), owner.rendering, owner.render_pending, owner.status.currentMessage(), errors, flush=True)
     raise AssertionError("Qt worker timeout")
 
+wait()
+assert window.basemap_enabled.isChecked() and window.basemap_items
+assert not window.axes_enabled.isChecked()
+assert not window.canvas.getPlotItem().getAxis("bottom").isVisible()
+assert not any("离线桌面版" in label.text() for label in window.findChildren(W.QLabel))
+from unittest.mock import patch
+with patch("geoquickview.app.QtGui.QDesktopServices.openUrl") as open_url:
+    window.repository_button.click()
+    assert open_url.call_args.args[0].toString() == "https://github.com/E-Golem/GeoQuickView"
+checks.append("startup province basemap, no offline badge and GitHub button")
+window.axes_enabled.setChecked(True)
+wait()
+assert window.canvas.getPlotItem().getAxis("bottom").isVisible()
+window.axes_enabled.setChecked(False)
+wait()
+assert not window.canvas.getPlotItem().getAxis("left").isVisible()
+checks.append("coordinate axes default off and toggle")
+
 with tempfile.TemporaryDirectory() as directory:
     files = create_samples(directory)
     window.add_layer(inspect(files["raster"]))
     wait()
     assert window.selected()["frame"].data.ndim == 2
     checks.append("raster open and preview")
+    item = window.add_property(window.properties, "STATISTICS_STANDARD_DEVIATION_full_name", "1234567890"*100)
+    assert item.toolTip(0) == item.text(0) and item.toolTip(1) == item.text(1)
+    assert window.properties.textElideMode() == QtCore.Qt.TextElideMode.ElideNone
+    def read_dialog(dialog):
+        assert dialog.findChild(W.QPlainTextEdit).toPlainText() == item.text(1)
+        assert item.text(0) in dialog.windowTitle()
+        return W.QDialog.DialogCode.Accepted
+    with patch.object(W.QDialog, "exec", new=read_dialog):
+        window.property_details(item, 1)
+    checks.append("full property names, tooltips and copyable untruncated detail")
+    box = window.canvas.getViewBox()
+    for factor in (1e-50, 1e50):
+        box.scaleBy((factor, factor))
+        wait()
+        ranges = box.viewRange()
+        for axis, limits in zip(ranges, (box.state["limits"]["xRange"], box.state["limits"]["yRange"])):
+            span = axis[1]-axis[0]
+            assert limits[0]*(1-1e-6) <= span <= limits[1]*(1+1e-6), (span, limits)
+    window.fit_current()
+    wait()
+    checks.append("zoom clamps actual extreme scale attempts")
+    window.basemap_enabled.setChecked(False)
+    wait()
+    assert not window.basemap_items
+    window.basemap_enabled.setChecked(True)
+    wait()
+    assert window.basemap_items
+    checks.append("province basemap toggles independently of data")
     window.selector.setCurrentIndex(1)
     wait()
     assert window.selected()["selection"]["bands"] == [2]
@@ -80,6 +126,13 @@ with tempfile.TemporaryDirectory() as directory:
     window.add_layer(inspect(files["nc"]))
     wait()
     assert set(window.dimension_spins) == {"time", "level"}
+    nc_minimum = window.canvas.getViewBox().state["limits"]["xRange"][0]
+    window.layers.setCurrentRow(1)
+    wait()
+    assert window.canvas.getViewBox().state["limits"]["xRange"][0] < nc_minimum
+    window.layers.setCurrentRow(0)
+    wait()
+    assert window.canvas.getViewBox().state["limits"]["xRange"][0] == nc_minimum
     assert window.selected()["shown_metadata"]["当前变量空间属性"]["X/Y 分辨率"] == [5., 5.]
     window.dimension_spins["time"].setValue(1)
     window.dimension_spins["level"].setValue(1)
@@ -145,6 +198,9 @@ with tempfile.TemporaryDirectory() as directory:
     while window.entries:
         window.remove_layer()
         wait()
+    assert window.stack.currentIndex() == 1 and window.basemap_items
+    window.basemap_enabled.setChecked(False)
+    wait()
     assert window.stack.currentIndex() == 0
     checks.append("remove all layers")
     window.close()
