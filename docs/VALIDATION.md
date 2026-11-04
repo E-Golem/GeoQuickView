@@ -1,12 +1,21 @@
-# GeoQuickView 0.2 验证记录
+# GeoQuickView 0.3 验证记录
 
-日期：2026-10-26。测试平台：Windows 11 x64、Python 3.12、GDAL 3.13。
+日期：2026-11-04。测试平台：Windows x64、Python 3.12.15、GDAL 3.13.3、PySide6 6.11.2。
+
+## 本次迁移（项目移入中文路径）
+
+项目从 `Desktop\GLASS\GeoQuickView` 迁至 `Desktop\开发\GeoQuickView`，暴露出一个此前被 ASCII 路径掩盖的真实缺陷：
+
+- **缺陷**：`geoquickview/__init__.py` 在导入时把 `PROJ_DATA`/`PROJ_LIB` 指向安装目录内的 `proj` 文件夹。PROJ 无法通过非 ASCII 路径打开 `proj.db`，导致所有坐标系解析失败（`Cannot find proj.db`），属性/预览/重投影整体不可用；打包版（冻结布局）同样受影响。
+- **修复**：导入时先丢弃继承的 `PROJ_DATA`/`PROJ_LIB`（避免其他软件或已失效盘符的残留值接管），再处理自身数据目录——ASCII 路径直接使用；非 ASCII 路径则复制到 `%TEMP%\GeoQuickView\proj-data` 这一 ASCII 镜像目录并指向它。源码运行与便携包均适用。
+- **回归测试**：`test_non_ascii_runtime_path_does_not_break_proj_lookup` 断言 PROJ 变量只指向含 `proj.db` 的 ASCII 路径，并在父进程故意设置无效 `PROJ_DATA` 时，子进程仍能解析 `EPSG:4326` 与 `EPSG:3857`。
+- **其他迁移项**：`.conda` 经复制 + 显式前缀改写迁移（`conda rename` 在 38k 文件规模下卡住，未采用）；改写后清除旧字节码缓存，并核验 7762 个 `.py` 源文件语法无误、新旧环境互不污染。
 
 ## 已验证范围
 
 | 检查 | 结果与覆盖 |
 | --- | --- |
-| 核心集成测试 | 19 项通过：栅格属性、NoData/缩放、RGB/视窗上限、NC 变量/切片/日历/经纬度方向、中文路径的 NC3/NC4、valid_range、三种矢量格式、重投影、取消清理、未知坐标系、旋转像元、源文件变化、内置 34 省界及离线投影 |
+| 核心集成测试 | 20 项通过：栅格属性、NoData/缩放、RGB/视窗上限、NC 变量/切片/日历/经纬度方向、中文路径的 NC3/NC4、valid_range、三种矢量格式、重投影、取消清理、未知坐标系、旋转像元、源文件变化、内置 34 省界及离线投影、非 ASCII 运行路径下的 PROJ 解析 |
 | Qt 交互测试 | 20 组通过：波段、RGB、手工拉伸、隐藏图层、NC 切片及时间标签、不同维度变量、失败投影保持原坐标系、图层顺序、后台统计、重投影与出图菜单、仅属性 NC、空间/索引模式切换、移除全部图层、属性全文、缩放极限、坐标轴、省界开关与 GitHub 按钮 |
 | 离线地图 | 禁止 Python 网络连接时导出 PNG/PDF，并检查输出文件；实际图像已进行视觉检查 |
 | 便携包迁移 | 在临时目录解压 zip，移除外部 Python/Conda/GDAL/PROJ/Qt 搜索路径，从不同工作目录运行 exe |
@@ -14,6 +23,14 @@
 | 真实 TIF | 本机一份约 224 MB、5843 × 4310、12 波段且带概览的文件，通过属性、预览和原始像元查询验证 |
 | 不改写输入 | 读取与统计前后，检查输入 TIFF 及其附属文件大小和修改时间保持不变；真实文件及附属文件 SHA-256 在便携版打开前后保持不变；输出重名时拒绝覆盖 |
 | 大文件分配 | 逻辑大小 12 GiB、每波段 1 GiB 的稀疏合成 TIFF，只选择一波段，预览数组上限 1536 × 1536 |
+
+复现命令（覆盖沙箱下系统临时目录不可写的限制）：
+
+~~~powershell
+. scripts\env.ps1
+$env:QT_QPA_PLATFORM = 'offscreen'
+.\.conda\python.exe scripts\run_tests.py --gui
+~~~
 
 运行脚本输出是权威记录。最终发行包通过 scripts/verify_bundle.py 后，artifacts/portable-verification.json 的 passed 字段为 true；GitHub Actions 另外在 Windows runner 上执行同一组脚本，不以“已配置工作流”当作“云端测试已通过”。
 

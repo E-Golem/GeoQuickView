@@ -43,7 +43,12 @@ with tempfile.TemporaryDirectory(prefix="GeoQuickView-portable-") as temporary:
                                (crash.read_text(encoding="utf-8") if crash.exists() else result.stderr.decode(errors="replace")))
     run(["--self-check", output])
     backend = json.loads((output/"self-check.json").read_text(encoding="utf-8"))
-    assert all(backend["drivers"][name] for name in ("GTiff", "netCDF", "GPKG", "ESRI Shapefile")), backend
+    # NetCDF is read through h5netcdf/SciPy, not a GDAL driver, so only the
+    # GDAL formats the app actually drives are required here. The NC results in
+    # the same report (nc_pixel, statistics) prove the scientific stack works.
+    assert all(backend["drivers"][name] for name in ("GTiff", "GPKG", "ESRI Shapefile")), backend
+    assert abs(backend["nc_pixel"]["物理值"] - 312.29) < 1e-8, backend["nc_pixel"]
+    assert backend["statistics"]["统计"]["1"]["有效像元"] > 0, backend["statistics"]
     assert (output/"map.png").stat().st_size > 5000
     assert (output/"map.pdf").read_bytes().startswith(b"%PDF")
     report["checks"].append("backend, projections, formats and PNG/PDF export")

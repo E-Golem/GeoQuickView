@@ -269,6 +269,58 @@ class GeoIntegration(unittest.TestCase):
         self.assertEqual(len(frame.geometries), 34)
         self.assertNotIn("不完整", frame.note)
 
+    def test_non_ascii_runtime_path_does_not_break_proj_lookup(self):
+        """PROJ cannot read proj.db through a non-ASCII path.
+
+        The package must therefore hand PROJ only ASCII locations. On a Chinese
+        install path it mirrors the data to an ASCII cache instead of pointing
+        PROJ at the install directory, and the ambient PROJ_* variables must be
+        dropped so unrelated leftovers cannot take over.
+        """
+        import os
+        import subprocess
+        import sys
+
+        import geoquickview
+        from geoquickview import _is_ascii
+
+        root = Path(geoquickview.__file__).resolve().parent.parent
+        if _is_ascii(root):
+            self.skipTest("project lives on an ASCII path; non-ASCII case not exercised")
+
+        pinned = {key: os.environ.get(key) for key in ("PROJ_DATA", "PROJ_LIB")}
+        try:
+            for key in ("PROJ_DATA", "PROJ_LIB"):
+                value = os.environ.get(key)
+                if value:
+                    self.assertTrue(_is_ascii(value), f"{key} points at a non-ASCII path: {value}")
+                    self.assertTrue((Path(value) / "proj.db").is_file(), f"{key} lacks proj.db: {value}")
+            # A fresh interpreter must resolve CRS even if the parent shell had a
+            # stale PROJ_DATA value pointing at unrelated software.
+            script = (
+                "import geoquickview\n"
+                "from osgeo import osr, gdal\n"
+                "gdal.UseExceptions()\n"
+                "s = osr.SpatialReference(); s.SetFromUserInput('EPSG:4326')\n"
+                "print(s.GetName())\n"
+                "s = osr.SpatialReference(); s.SetFromUserInput('EPSG:3857')\n"
+                "print(s.GetName())\n"
+            )
+            environment = dict(os.environ)
+            environment["PROJ_DATA"] = str(root / "does-not-exist" / "proj")
+            environment.pop("PROJ_LIB", None)
+            result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                                    cwd=str(root), env=environment, timeout=180)
+            self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+            self.assertIn("WGS", result.stdout)
+            self.assertIn("Pseudo-Mercator", result.stdout)
+        finally:
+            for key, value in pinned.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
 
 if __name__ == "__main__":
     unittest.main()

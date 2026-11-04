@@ -14,21 +14,29 @@ Windows 离线地理数据快看工具。拖入一个文件，查看属性、空
 
 发行包保留 _internal 文件夹和第三方许可文件，不要只复制 exe。当前发行包未进行代码签名。
 
-从源码运行：
+从源码运行（仓库自带便携环境 `.conda`，无需 conda 激活）：
 
 ~~~powershell
-conda env create -f environment.yml
-conda activate geoquickview
-python -m geoquickview
+. scripts\env.ps1
+.\.conda\python.exe -m geoquickview
+~~~
+
+若需要从零重建环境：
+
+~~~powershell
+conda env create -f environment.yml --prefix .conda
+. scripts\env.ps1
 ~~~
 
 也可以传入文件：
 
 ~~~powershell
-python -m geoquickview "D:\data\image.tif" "D:\data\weather.nc"
+.\.conda\python.exe -m geoquickview "D:\data\image.tif" "D:\data\weather.nc"
 ~~~
 
-## 0.2 功能
+> **关于中文路径**：项目可以放在中文目录下运行。PROJ 无法从非 ASCII 路径读取 `proj.db`，因此 `scripts\env.ps1` 与程序启动代码都会清除 `PROJ_DATA`/`PROJ_LIB`，让 PROJ 使用自身搜索路径。请不要手动把这两个变量指向安装目录内的 `proj` 文件夹。
+
+## 0.3 功能
 
 | 模块 | 已实现 |
 | --- | --- |
@@ -62,16 +70,18 @@ python -m geoquickview "D:\data\image.tif" "D:\data\weather.nc"
 ## 验证与打包
 
 ~~~powershell
-python -m unittest discover -s tests -v
-python -m tests.gui_smoke
-python -m geoquickview --self-check artifacts\new-self-check
-python scripts\build_windows.py
-python scripts\verify_bundle.py
+. scripts\env.ps1
+$env:QT_QPA_PLATFORM = 'offscreen'
+.\.conda\python.exe scripts\run_tests.py --gui
+.\.conda\python.exe scripts\build_windows.py
+.\.conda\python.exe scripts\verify_bundle.py
 ~~~
 
---self-check 输出目录应使用新目录名。打包产生 dist\GeoQuickView\GeoQuickView.exe 和 dist\GeoQuickView-0.2.0-windows-x64.zip。
+`scripts\run_tests.py` 会依次执行核心集成测试与 Qt 界面检查，并把临时文件放到 `artifacts\test-tmp\`；在受限沙箱下直接运行 `python -m unittest` 会因系统临时目录不可写而失败。
 
-详见 [验证说明](docs/VALIDATION.md)、[需求及开源调研](docs/planning.md)。测试样例由代码生成，不随仓库上传真实科研数据、虚拟环境或缓存。Windows GitHub Actions 工作流负责测试、打包与便携包自检。
+打包产生 `dist\GeoQuickView\GeoQuickView.exe` 和 `dist\GeoQuickView-0.3.0-windows-x64.zip`（附 `SHA256SUMS.txt`）。
+
+详见 [验证说明](docs/VALIDATION.md)、[需求及开源调研](docs/planning.md)、[开发说明](AGENTS.md)、[已知问题](docs/issues.md)。测试样例由代码生成，不随仓库上传真实科研数据、虚拟环境或缓存。Windows GitHub Actions 工作流负责测试、打包与便携包自检。
 
 ## 技术与许可
 

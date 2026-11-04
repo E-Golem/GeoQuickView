@@ -396,10 +396,21 @@ def reproject(layer, selection, destination, target, resampling="near", cancel=N
         else:
             if layer.kind == "nc":
                 from .nc import materialize_nc
-                with tempfile.TemporaryDirectory(prefix="geoquickview-nc-") as directory:
-                    source = materialize_nc(layer, selection, Path(directory)/"slice.tif", cancel)
+                # Keep the intermediate slice next to the real output: that
+                # directory is already writable and on the same volume, unlike
+                # a system temp folder that managed environments may lock down.
+                slice_path = destination.with_name(destination.stem + ".slice.tif")
+                try:
+                    source = materialize_nc(layer, selection, slice_path, cancel)
                     out = gdal.Warp(temporary, source, format="GTiff", dstSRS=target, resampleAlg=resampling,
                                     creationOptions=["TILED=YES", "COMPRESS=LZW", "BIGTIFF=IF_SAFER"], callback=callback)
+                finally:
+                    for leftover in (slice_path, slice_path.with_name(slice_path.name + ".aux.xml")):
+                        if leftover.exists():
+                            try:
+                                leftover.unlink()
+                            except OSError:
+                                pass
             else:
                 source = _selected_raster(layer, selection)
                 out = gdal.Warp(temporary, source, format="GTiff", dstSRS=target, resampleAlg=resampling,
