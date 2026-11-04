@@ -10,6 +10,8 @@ artifacts/
 .pytest_cache/
 .coverage
 *.log
+# Scratch dirs created when a temporary-directory override is unavailable.
+tmp????????/
 *.tif
 *.tiff
 *.nc
