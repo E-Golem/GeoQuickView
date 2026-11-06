@@ -216,6 +216,71 @@ class GeoIntegration(unittest.TestCase):
             self.assertAlmostEqual(stats["最大值"], 251.)
 
 
+    def test_nc_duplicate_longitude_endpoint_previews(self):
+        import h5netcdf
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/"longitude_endpoint.nc"
+            lat = np.arange(-60, 61, 5, dtype=float)
+            lon = np.arange(0, 361, 5, dtype=float)
+            data = np.arange(len(lat)*len(lon), dtype=np.float32).reshape(len(lat), len(lon))
+            data[:, -1] = data[:, 0]  # the stored 360° column repeats the physical 0° column
+            with h5netcdf.File(path, "w") as ds:
+                ds.attrs["Conventions"] = "CF-1.8"
+                ds.dimensions = {"lat": len(lat), "lon": len(lon)}
+                for name, values, units, axis in (("lat", lat, "degrees_north", "Y"),
+                                                  ("lon", lon, "degrees_east", "X")):
+                    coordinate = ds.create_variable(name, (name,), dtype="f8", data=values)
+                    coordinate.attrs.update(units=units, axis=axis)
+                var = ds.create_variable("temperature", ("lat", "lon"), dtype="f4", data=data)
+                var.attrs["units"] = "K"
+            layer = inspect(path)
+            grid = grid_info(layer.path, "temperature")
+            self.assertTrue(grid["regular"])
+            self.assertTrue(grid["merged"])
+            self.assertEqual(len(grid["x"]), len(lon)-1)
+            frame = render(layer, target=layer.wkt, edge=72)
+            self.assertAlmostEqual(float(np.nanmin(frame.data)), 0.0)
+            self.assertAlmostEqual(float(np.nanmax(frame.data)), float(data.max()))
+            value = query(layer, layer.selection, 0.0, 0.0, layer.wkt)
+            self.assertEqual(value["原始列"], 0)
+            self.assertEqual(value["物理值"], float(data[len(lat)//2, 0]))
+            self.assertIn("规则网格", layer.metadata["定位状态"])
+            self.assertIn("合并", layer.metadata["网格说明"])
+
+    def test_nc_nonuniform_latitude_previews_over_whole_field(self):
+        import h5netcdf
+        lat = np.array([-60, -50, -35, -20, 0, 20, 35, 50, 60], dtype=float)
+        lon = np.arange(0, 10, 1, dtype=float)
+        data = np.arange(len(lat)*len(lon), dtype=np.float32).reshape(len(lat), len(lon))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/"stretched_latitude.nc"
+            with h5netcdf.File(path, "w") as ds:
+                ds.attrs["Conventions"] = "CF-1.8"
+                ds.dimensions = {"lat": len(lat), "lon": len(lon)}
+                for name, values, units, axis in (("lat", lat, "degrees_north", "Y"),
+                                                  ("lon", lon, "degrees_east", "X")):
+                    coordinate = ds.create_variable(name, (name,), dtype="f8", data=values)
+                    coordinate.attrs.update(units=units, axis=axis)
+                var = ds.create_variable("temperature", ("lat", "lon"), dtype="f4", data=data)
+                var.attrs["units"] = "K"
+            layer = inspect(path)
+            grid = grid_info(layer.path, "temperature")
+            self.assertFalse(grid["regular"])
+            self.assertEqual(len(grid["ry"]), len(lat))
+            self.assertIn("非均匀", layer.metadata["定位状态"])
+            frame = render(layer, target=layer.wkt, edge=64)
+            finite = frame.data[np.isfinite(frame.data)]
+            self.assertGreater(finite.size, 0)
+            self.assertGreaterEqual(float(finite.min()), float(data.min()))
+            self.assertLessEqual(float(finite.max()), float(data.max()))
+            # The sampled preview still reflects the whole field, not one band of it.
+            self.assertGreater(float(finite.max()-finite.min()), .8*float(data.max()-data.min()))
+            value = query(layer, layer.selection, 4.0, 0.0, layer.wkt)
+            self.assertEqual(value["像元中心"], [4.0, 0.0])
+            self.assertEqual(value["物理值"], float(data[len(lat)//2, 4]))
+            with self.assertRaisesRegex(ValueError, "均匀"):
+                reproject(layer, layer.selection, self.root/"nonuniform.tif", "EPSG:4326")
+
     def test_global_netcdf_edge_cells_are_queryable_across_longitude_wrap(self):
         layer = inspect(self.files["nc"])
         for longitude in (-182.4, 177.6, 537.6):

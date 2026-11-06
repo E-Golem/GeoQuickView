@@ -33,6 +33,48 @@ def _axis(ds, var, which):
     return None, var.dims[-1 if which == "x" else -2]
 
 
+def _ordered(values, ascending):
+    """Sort one coordinate axis, dropping an exactly repeated endpoint.
+
+    A 0–360 longitude axis that also stores 360 repeats the physical 0° column
+    after wrapping to -180–180; keeping both would make the axis look irregular.
+    """
+    order = np.argsort(values if ascending else -values, kind="stable")
+    ordered = values[order]
+    if len(ordered) > 1:
+        gaps = np.diff(ordered) * (1.0 if ascending else -1.0)
+        tolerance = max(float(np.median(np.abs(gaps))) * 1e-6, 1e-12)
+        keep = np.concatenate(([True], gaps > tolerance))
+        order, ordered = order[keep], ordered[keep]
+    return ordered, order
+
+
+def _axis_plan(centres, ascending):
+    """Return preview centres, their source position, spacing and regularity.
+
+    Irregular but monotonic one-dimensional coordinates (stretched latitude,
+    merged duplicate endpoints) are reflected on an equally spaced preview axis
+    so the overall field can still be drawn. Queries and statistics keep using
+    the original coordinates.
+    """
+    gaps = np.diff(centres) * (1.0 if ascending else -1.0)
+    spacing = float(np.median(gaps))
+    regular = bool(len(gaps) and spacing > 0 and np.all(gaps > 0)
+                   and np.allclose(gaps, spacing, rtol=1e-3, atol=1e-7))
+    if regular:
+        return centres.copy(), np.arange(len(centres)), spacing, True
+    sign = 1.0 if ascending else -1.0
+    signed = centres * sign
+    edges = np.empty(len(centres) + 1)
+    edges[1:-1] = (signed[:-1] + signed[1:]) / 2
+    edges[0] = signed[0] - gaps[0] / 2
+    edges[-1] = signed[-1] + gaps[-1] / 2
+    spacing = (edges[-1] - edges[0]) / len(centres)
+    target = edges[0] + spacing * (np.arange(len(centres)) + .5)
+    position = np.rint(np.interp(target, signed, np.arange(len(centres)))).astype(int)
+    return target * sign, position, spacing, False
+
+
 def _grid(ds, variable):
     var = ds[variable]
     xn, xd = _axis(ds, var, "x")
@@ -60,15 +102,18 @@ def _grid(ds, variable):
         x = (x + 180) % 360 - 180
     if not np.isfinite(x).all() or not np.isfinite(y).all():
         raise ValueError("空间坐标包含无效值。")
-    xo, yo = np.argsort(x), np.argsort(-y)
-    x, y = x[xo], y[yo]
+    x_total, y_total = len(x), len(y)
+    x, xo = _ordered(x, True)
+    y, yo = _ordered(y, False)
     if len(x) < 2 or len(y) < 2:
         raise ValueError("地图预览需要每个空间轴至少两个坐标。")
-    dx, dy = float(np.median(np.diff(x))), float(-np.median(np.diff(y)))
-    if dx <= 0 or dy <= 0 or not np.allclose(np.diff(x), dx, rtol=1e-3, atol=1e-7) or not np.allclose(np.diff(y), -dy, rtol=1e-3, atol=1e-7):
-        raise ValueError("坐标不是均匀规则网格（或经度含重复端点）；可查看属性，不能按仿射栅格绘制。")
+    rx, rxi, dx, x_regular = _axis_plan(x, True)
+    ry, ryi, dy, y_regular = _axis_plan(y, False)
     return {"x": x, "y": y, "xo": xo, "yo": yo, "xd": xd, "yd": yd, "dx": dx, "dy": dy,
-            "wkt": wkt, "extent": (x[0]-dx/2, y[-1]-dy/2, x[-1]+dx/2, y[0]+dy/2),
+            "rx": rx, "ry": ry, "rxi": rxi, "ryi": ryi,
+            "regular": x_regular and y_regular,
+            "merged": len(x) != x_total or len(y) != y_total,
+            "wkt": wkt, "extent": (rx[0]-dx/2, ry[-1]-dy/2, rx[-1]+dx/2, ry[0]+dy/2),
             "extra": {d: var.sizes[d] for d in var.dims if d not in (xd, yd)}}
 
 
@@ -101,7 +146,14 @@ def inspect_nc(path):
                 raise ValueError("没有二维数值变量，当前仅查看属性。")
             grid = _grid(ds, selection["variable"])
             wkt, extent = grid["wkt"], grid["extent"]
-            metadata["定位状态"] = "规则网格" if wkt else "空间参照未知，使用原坐标/数组坐标"
+            if not grid["regular"]:
+                metadata["定位状态"] = "非均匀网格：预览按等间距近似显示，像元查询与统计使用原始坐标"
+            elif wkt:
+                metadata["定位状态"] = "规则网格"
+            else:
+                metadata["定位状态"] = "空间参照未知，使用原坐标/数组坐标"
+            if grid["merged"]:
+                metadata["网格说明"] = "已合并重复的经度/纬度端点后再定位"
         except ValueError as exc:
             wkt, extent = "", None
             metadata["定位状态"] = str(exc)
@@ -134,29 +186,34 @@ def _read(ds, variable, grid, indices, rows=None, cols=None, physical=True):
     return values
 
 
-def render_nc(layer, selection, target, extent, edge):
+def render_nc(layer, selection, target, extent, edge, cancel=None):
     with dataset(layer.path) as ds:
         grid = _grid(ds, selection["variable"])
         native = change_extent(extent, target, grid["wkt"])
-        cols = np.flatnonzero((grid["x"] >= native[0]-grid["dx"]) & (grid["x"] <= native[2]+grid["dx"]))
-        rows = np.flatnonzero((grid["y"] >= native[1]-grid["dy"]) & (grid["y"] <= native[3]+grid["dy"]))
+        rx, ry, dx, dy = grid["rx"], grid["ry"], grid["dx"], grid["dy"]
+        cols = np.flatnonzero((rx >= native[0]-dx) & (rx <= native[2]+dx))
+        rows = np.flatnonzero((ry >= native[1]-dy) & (ry <= native[3]+dy))
         if not len(cols) or not len(rows):
             return Frame(extent, target, np.full((2, 2), np.nan, dtype=np.float32), note="当前视窗没有数据")
-        bounds = (grid["x"][cols[0]]-grid["dx"]/2, grid["y"][rows[-1]]-grid["dy"]/2,
-                  grid["x"][cols[-1]]+grid["dx"]/2, grid["y"][rows[0]]+grid["dy"]/2)
+        bounds = (rx[cols[0]]-dx/2, ry[rows[-1]]-dy/2, rx[cols[-1]]+dx/2, ry[rows[0]]+dy/2)
         nx, ny = dimensions(bounds, edge)
         nx, ny = min(nx, len(cols)), min(ny, len(rows))
         ci = cols[np.minimum(((np.arange(nx)+.5)*len(cols)/nx).astype(int), len(cols)-1)]
         ri = rows[np.minimum(((np.arange(ny)+.5)*len(rows)/ny).astype(int), len(rows)-1)]
-        values = _read(ds, selection["variable"], grid, selection.get("indices", {}), ri, ci).astype(np.float32)
+        if cancel and cancel.is_set():
+            raise Cancelled("已取消预览")
+        values = _read(ds, selection["variable"], grid, selection.get("indices", {}),
+                       grid["ryi"][ri], grid["rxi"][ci]).astype(np.float32)
         mem = gdal.GetDriverByName("MEM").Create("", nx, ny, 1, gdal.GDT_Float32)
         mem.SetGeoTransform((bounds[0], (bounds[2]-bounds[0])/nx, 0, bounds[3], 0, -(bounds[3]-bounds[1])/ny))
         mem.SetProjection(grid["wkt"])
         mem.GetRasterBand(1).SetNoDataValue(float("nan"))
         mem.GetRasterBand(1).SetUnitType(ds[selection["variable"]].attrs.get("units", ""))
         mem.GetRasterBand(1).WriteArray(values)
-        frame = _warp_frame(mem, extent, target, edge, scaled=False)
+        frame = _warp_frame(mem, extent, target, edge, scaled=False, cancel=cancel)
         frame.note = "当前变量/切片的预览抽样范围（物理值）"
+        if not grid["regular"]:
+            frame.note += "；坐标非均匀，预览按等间距近似显示，查询与统计仍用原始坐标"
         return frame
 
 
@@ -226,6 +283,8 @@ def statistics_nc(layer, selection, cancel=None, progress=None):
 
 def materialize_nc(layer, selection, path, cancel=None):
     grid = grid_info(layer.path, selection["variable"])
+    if not grid["regular"]:
+        raise ValueError("当前变量坐标不是均匀网格，重投影会改变像元定位；预览、查询与统计仍可使用。")
     ds = gdal.GetDriverByName("GTiff").Create(str(path), len(grid["x"]), len(grid["y"]), 1,
                                              gdal.GDT_Float64, ["TILED=YES", "COMPRESS=LZW", "BIGTIFF=IF_SAFER"])
     ds.SetGeoTransform((grid["extent"][0], grid["dx"], 0, grid["extent"][3], 0, -grid["dy"]))
