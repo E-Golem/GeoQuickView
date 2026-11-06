@@ -39,9 +39,9 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 .\.conda\python.exe scripts\run_tests.py --gui
 ```
 
-`scripts\run_tests.py` 会先跑 20 项核心集成测试，再跑 20 组 Qt 界面检查。**不要直接使用 `python -m unittest`**：本工具在受限沙箱下运行，默认系统临时目录可被创建但不可写，而测试需要在其中生成合成栅格/NC。该脚本把 `tempfile` 重定向到 `artifacts\test-tmp\`，两种环境都能跑。
+`scripts\run_tests.py` 会先跑 22 项核心集成测试，再跑 22 组 Qt 界面检查。**不要直接使用 `python -m unittest`**：本工具在受限沙箱下运行，默认系统临时目录可被创建但不可写，而测试需要在其中生成合成栅格/NC。该脚本把 `tempfile` 重定向到 `artifacts\test-tmp\`，两种环境都能跑。
 
-当前基线：**20 项核心测试 + 20 组界面检查全部通过**。
+当前基线：**22 项核心测试 + 22 组界面检查全部通过**。
 
 ## 打包与发布
 
@@ -74,4 +74,5 @@ GitHub Actions（`.github/workflows/windows.yml`）在云端 Windows runner 上�
 - 界面中的色带拉伸/直方图来自预览抽样；“精确统计”才扫描全量。二者不得混淆展示。
 - 预览与出图共用同一套图层、切片、范围与配色参数，避免显示不一致。
 - 修改 `nc.py`、`data.py` 的坐标系/缺失值逻辑后，务必运行完整测试（含中文路径用例）。
+- 预览按图层独立后台渲染，并按「地图坐标系 + 视窗 + 波段/变量/切片」缓存（`app.py` 的 `scene_token` / `render_scene`）。改动渲染路径后运行 `--gui` 检查，确认过期代次被取消、未完成图层显示加载状态。
 - `.conda` 是通过复制并显式改写前缀迁移过来的。**重新创建环境时**用 `conda env create -f environment.yml --prefix .conda`，不要依赖 `conda rename`（在本机 38k 文件规模下会卡住）。
