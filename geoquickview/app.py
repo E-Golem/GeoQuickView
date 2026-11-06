@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 import json
+import os
 import tempfile
 import threading
 import traceback
@@ -58,14 +59,19 @@ class MainWindow(W.QMainWindow):
         self.setMinimumSize(1080, 720)
         self.setAcceptDrops(True)
         self.pool = QtCore.QThreadPool(self)
-        self.pool.setMaxThreadCount(2)
+        # Layers render independently: keep enough workers that one slow read
+        # cannot hold back the others (the early view is what matters).
+        self.pool.setMaxThreadCount(max(4, min(8, os.cpu_count() or 4)))
         self.jobs = set()
         self.entries = {}
         self.basemap = inspect(Path(__file__).with_name("assets") / "china_provinces.gpkg")
         self.basemap_items = []
+        self.basemap_frame = None
+        self.basemap_frame_token = None
         self.target = ""
         self.generation = 0
-        self.rendering = False
+        self.render_jobs = {}
+        self.layer_errors = {}
         self.render_pending = False
         self.operation = None
         self.demo_directory = None
@@ -78,6 +84,11 @@ class MainWindow(W.QMainWindow):
         self._menus()
         self.populate_selection()
         self.show_basemap_home()
+
+    @property
+    def rendering(self):
+        """True while any layer preview is still being produced."""
+        return bool(self.render_jobs)
 
     def _build(self):
         root = W.QWidget()
@@ -434,13 +445,15 @@ class MainWindow(W.QMainWindow):
         key = id(layer)
         entry = {"key": key, "layer": layer, "selection": deepcopy(layer.selection),
                  "style": {"cmap": "viridis", "lower": None, "upper": None, "opacity": 1., "line": "#d88720"},
-                 "frame": None, "items": []}
+                 "frame": None, "frame_token": None, "want_token": None,
+                 "loading": False, "items": [], "statistics": None}
         self.entries[key] = entry
-        item = W.QListWidgetItem(f"{layer.kind.upper()}  {layer.name}")
+        item = W.QListWidgetItem(self.layer_label(layer))
         item.setToolTip(layer.path)
         item.setData(QtCore.Qt.ItemDataRole.UserRole, key)
         item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(QtCore.Qt.CheckState.Checked)
+        entry["item"] = item
         self.layers.insertItem(0, item)
         self.layers.setCurrentItem(item)
         self.stack.setCurrentIndex(1)
@@ -523,6 +536,7 @@ class MainWindow(W.QMainWindow):
     def populate_properties(self):
         self.properties.clear()
         self.preview_property = None
+        self.statistics_property = None
         entry = self.selected()
         if not entry:
             return
@@ -539,7 +553,9 @@ class MainWindow(W.QMainWindow):
                     "坐标系": crs_name(spatial["wkt"]), "坐标系 WKT": spatial["wkt"],
                     "范围": spatial["extent"], "空间坐标单位": coordinate_unit(spatial["wkt"]),
                     "X/Y 分辨率": [spatial["dx"], spatial["dy"]],
-                    "宽 × 高": [len(spatial["x"]), len(spatial["y"])]}
+                    "宽 × 高": [len(spatial["x"]), len(spatial["y"])],
+                    "网格类型": "规则网格" if spatial["regular"] else
+                                "非均匀网格：预览按等间距近似显示，查询与统计使用原始坐标"}
             except ValueError as exc:
                 md["当前变量空间属性"] = {"定位状态": str(exc)}
             from .nc import dimension_label
@@ -547,6 +563,8 @@ class MainWindow(W.QMainWindow):
                                   for d, i in entry["selection"].get("indices", {}).items()}
         if entry["layer"].kind == "nc" and not entry["selection"].get("variable"):
             md["地图预览"] = "没有二维数值变量；全部文件属性仍可查看和复制。"
+        if entry.get("statistics") is not None:
+            md["精确统计（全量，物理值）"] = entry["statistics"]
         frame = entry["frame"]
         summary = self.preview_summary(entry)
         if entry["layer"].kind != "vector":
@@ -555,12 +573,20 @@ class MainWindow(W.QMainWindow):
         for key, value in md.items():
             self.add_property(self.properties, key, value)
         self.properties.expandToDepth(0)
-        for index in range(self.properties.topLevelItemCount()):
+        # Exact statistics and the preview sample are the two value summaries the
+        # user looks for; keep them together at the top of the property tree.
+        for index in range(self.properties.topLevelItemCount() - 1, -1, -1):
             item = self.properties.topLevelItem(index)
             if item.text(0) == "当前预览抽样值范围（物理值）":
                 self.preview_property = self.properties.takeTopLevelItem(index)
-                self.properties.insertTopLevelItem(0, self.preview_property)
-                self.preview_property.setExpanded(True)
+            elif item.text(0) == "精确统计（全量，物理值）":
+                self.statistics_property = self.properties.takeTopLevelItem(index)
+        if self.preview_property is not None:
+            self.preview_property.setExpanded(True)
+            self.properties.insertTopLevelItem(0, self.preview_property)
+        if self.statistics_property is not None:
+            self.statistics_property.setExpanded(True)
+            self.properties.insertTopLevelItem(0, self.statistics_property)
         self.properties.resizeColumnToContents(0)
 
     def add_property(self, parent, key, value):
@@ -774,6 +800,32 @@ class MainWindow(W.QMainWindow):
             except Exception as exc:
                 self.show_error(str(exc))
 
+    def is_visible(self, entry):
+        """Identity check: entry dicts contain arrays and must not be compared by value."""
+        return any(candidate is entry for candidate in self.visible())
+
+    def layer_label(self, layer):
+        return f"{layer.kind.upper()}  {layer.name}"
+
+    def set_layer_loading(self, entry, loading):
+        """Mark a layer as busy in the layer list so 'not ready' reads as busy."""
+        item = entry.get("item")
+        if item is None:
+            return
+        blocker = QtCore.QSignalBlocker(self.layers)
+        item.setText(self.layer_label(entry["layer"]) + ("  ·  加载中…" if loading else ""))
+        del blocker
+
+    def clear_entry(self, entry):
+        for item in entry["items"]:
+            self.canvas.removeItem(item)
+        entry["items"] = []
+
+    def scene_token(self, entry, extent, target):
+        """Identity of one rendered preview: viewport, CRS and slice/band choice."""
+        return (target, tuple(round(float(value), 9) for value in extent),
+                json.dumps(entry["selection"], sort_keys=True, default=str))
+
     def request_render(self):
         self.generation += 1
         self.render_pending = True
@@ -782,74 +834,166 @@ class MainWindow(W.QMainWindow):
         self.render_timer.start()
 
     def render_scene(self):
-        if self.rendering or (not self.entries and not self.basemap_enabled.isChecked()):
-            return
-        self.rendering = True
         self.render_pending = False
-        generation = self.generation
         extent, target = self.current_extent(), self.target
-        snapshot = [(entry["key"], entry["layer"], deepcopy(entry["selection"])) for entry in self.visible()]
-        if self.basemap_enabled.isChecked() and target:
-            snapshot.insert(0, ("basemap", self.basemap, self.basemap.selection))
-        else:
-            self.paint_basemap(None)
-        def calculate(cancel, progress):
-            result = []
-            for key, layer, selection in snapshot:
-                if cancel.is_set():
-                    break
-                try:
-                    result.append((key, render(layer, selection, target, extent, 1536), ""))
-                except Exception as exc:
-                    result.append((key, None, str(exc)))
-            return generation, result
-        worker = self.run_job(calculate, self.render_ready, error=lambda error: self.map_note.setText(error.splitlines()[-1]))
-        worker.signals.finished.connect(self.render_finished, QtCore.Qt.ConnectionType.QueuedConnection)
-
-    def render_finished(self):
-        self.rendering = False
-        if self.render_pending:
-            self.render_timer.start()
-
-    def render_ready(self, result):
-        generation, frames = result
-        if generation != self.generation:
+        if not self.entries and not self.basemap_enabled.isChecked():
             return
+        # Renders queued for a previous viewport are outdated: stop them before
+        # starting the new generation instead of letting the queue drain first.
+        for worker in list(self.render_jobs.values()):
+            worker.cancel.set()
+        self.render_jobs = {}
+        self.layer_errors = {}
         visible = {entry["key"] for entry in self.visible()}
         for entry in self.entries.values():
             if entry["key"] not in visible:
+                entry["loading"] = False
+                self.set_layer_loading(entry, False)
                 for item in entry["items"]:
                     item.hide()
-        notes = []
-        for key, frame, error in frames:
-            if key == "basemap":
+        for entry in self.visible():
+            token = self.scene_token(entry, extent, target)
+            entry["want_token"] = token
+            if entry["frame"] is not None and entry["frame_token"] == token:
+                entry["loading"] = False
+                self.set_layer_loading(entry, False)
+                if entry["items"]:
+                    for item in entry["items"]:
+                        item.show()
+                else:
+                    self.paint_entry(entry)
+                continue
+            # Never present a previous viewport or slice as if it were current;
+            # show the loading state until this layer's own render arrives.
+            self.clear_entry(entry)
+            entry["loading"] = True
+            self.set_layer_loading(entry, True)
+            self.start_layer_render(entry, token, extent, target)
+        if self.basemap_enabled.isChecked() and target:
+            self.start_basemap_render(extent, target)
+        else:
+            self.paint_basemap(None)
+        self.apply_order()
+        self.update_loading_state()
+
+    def start_layer_render(self, entry, token, extent, target):
+        key = entry["key"]
+        layer, selection = entry["layer"], deepcopy(entry["selection"])
+
+        def calculate(cancel, progress):
+            return render(layer, selection, target, extent, 1536, cancel=cancel)
+
+        worker = self.run_job(calculate,
+                              lambda frame: self.layer_rendered(key, token, frame),
+                              error=lambda message: self.layer_failed(key, token, message))
+        self.render_jobs[key] = worker
+        worker.signals.finished.connect(lambda: self.render_finished(key, worker),
+                                        QtCore.Qt.ConnectionType.QueuedConnection)
+
+    def start_basemap_render(self, extent, target):
+        token = ("basemap", tuple(round(float(value), 9) for value in extent), target)
+        if self.basemap_frame_token == token and self.basemap_frame is not None:
+            if not self.basemap_items:
+                self.paint_basemap(self.basemap_frame)
+            return
+        self.basemap_frame_token = token
+
+        def calculate(cancel, progress):
+            return render(self.basemap, self.basemap.selection, target, extent, 1536, cancel=cancel)
+
+        def completed(frame):
+            if self.basemap_frame_token == token:
+                self.basemap_frame = frame
                 self.paint_basemap(frame)
-                notes.append("中国省界底图"+ ("："+error if error else ""))
-                continue
-            if key not in self.entries:
-                continue
-            entry = self.entries[key]
-            entry["frame"] = frame
+                self.update_loading_state()
+
+        worker = self.run_job(calculate, completed, error=lambda message: self.basemap_failed(token, message))
+        self.render_jobs["basemap"] = worker
+        worker.signals.finished.connect(lambda: self.render_finished("basemap", worker),
+                                        QtCore.Qt.ConnectionType.QueuedConnection)
+
+    def layer_rendered(self, key, token, frame):
+        entry = self.entries.get(key)
+        if entry is None or entry["want_token"] != token:
+            return
+        entry["frame"] = frame
+        entry["frame_token"] = token
+        entry["loading"] = False
+        self.set_layer_loading(entry, False)
+        if self.is_visible(entry):
             self.paint_entry(entry)
-            if error:
-                notes.append(f'{entry["layer"].name}：{error}')
-            elif frame:
-                notes.append(frame.note)
+        self.after_render_update()
+
+    def layer_failed(self, key, token, message):
+        entry = self.entries.get(key)
+        if entry is None or entry["want_token"] != token:
+            return
+        if "已取消" in message:
+            return  # superseded by a newer render of the same scene
+        entry["frame"] = None
+        entry["frame_token"] = token
+        entry["loading"] = False
+        self.set_layer_loading(entry, False)
+        self.clear_entry(entry)
+        self.layer_errors[key] = message.splitlines()[-1]
+        self.after_render_update()
+
+    def basemap_failed(self, token, message):
+        if "已取消" in message:
+            return  # superseded; the next render_scene starts a fresh attempt
+        if self.basemap_frame_token == token:
+            self.basemap_frame_token = None
+            self.layer_errors["basemap"] = "中国省界暂不可绘制：" + message.splitlines()[-1]
+            self.update_loading_state()
+
+    def render_finished(self, key, worker):
+        if self.render_jobs.get(key) is worker:
+            del self.render_jobs[key]
+        self.update_loading_state()
+        if not self.render_jobs and self.render_pending:
+            self.render_timer.start()
+
+    def apply_order(self):
+        order = {entry["key"]: index for index, entry in enumerate(self.ordered())}
+        count = len(order)
+        for entry in self.entries.values():
+            for item in entry["items"]:
+                item.setZValue(count - order.get(entry["key"], 0) - 1)
+
+    def update_loading_state(self):
+        busy = [entry["layer"].name for entry in self.visible() if entry["loading"]]
+        if busy:
+            self.map_note.setText(f"正在加载 {len(busy)} 个图层：" + "、".join(busy))
+            return
+        notes = [entry["frame"].note for entry in self.visible() if entry["frame"] is not None]
+        for key, message in self.layer_errors.items():
+            if key == "basemap":
+                notes.append(message)
+            elif key in self.entries:
+                notes.append(f'{self.entries[key]["layer"].name}：{message}')
         self.map_note.setText("  ·  ".join(dict.fromkeys(notes)) or "没有勾选可见图层")
+
+    def after_render_update(self):
+        self.update_loading_state()
         self.update_histogram()
         self.update_legend()
         entry = self.selected()
         if entry:
-            summary = self.preview_summary(entry)
-            entry["shown_metadata"]["当前预览抽样值范围（物理值）"] = summary
-            item = getattr(self, "preview_property", None)
-            if item is not None:
-                item.setText(1, f"{len(summary)} 项")
-                item.takeChildren()
-                for key, value in summary.items():
-                    self.add_property(item, key, value)
-                item.setToolTip(1, text_json(summary))
-                item.setData(0, QtCore.Qt.ItemDataRole.UserRole, text_json(summary))
+            self.refresh_preview_property(entry)
+
+    def refresh_preview_property(self, entry):
+        summary = self.preview_summary(entry)
+        if "shown_metadata" not in entry:
+            return
+        entry["shown_metadata"]["当前预览抽样值范围（物理值）"] = summary
+        item = getattr(self, "preview_property", None)
+        if item is not None:
+            item.setText(1, f"{len(summary)} 项")
+            item.takeChildren()
+            for key, value in summary.items():
+                self.add_property(item, key, value)
+            item.setToolTip(1, text_json(summary))
+            item.setData(0, QtCore.Qt.ItemDataRole.UserRole, text_json(summary))
 
     def paint_entry(self, entry):
         for item in entry["items"]:
@@ -873,7 +1017,7 @@ class MainWindow(W.QMainWindow):
             image.setOpacity(style["opacity"])
             self.canvas.addItem(image)
             entry["items"].append(image)
-            image.setVisible(entry in self.visible())
+            image.setVisible(self.is_visible(entry))
         else:
             path = QtGui.QPainterPath()
             point_x, point_y = [], []
@@ -894,14 +1038,14 @@ class MainWindow(W.QMainWindow):
             item.setOpacity(style["opacity"])
             self.canvas.addItem(item)
             entry["items"].append(item)
-            item.setVisible(entry in self.visible())
+            item.setVisible(self.is_visible(entry))
             if point_x:
                 points = pg.ScatterPlotItem(point_x, point_y, size=6, brush=style["line"], pen=None)
                 points.setZValue(order)
                 points.setOpacity(style["opacity"])
                 self.canvas.addItem(points)
                 entry["items"].append(points)
-                points.setVisible(entry in self.visible())
+                points.setVisible(self.is_visible(entry))
         if self.selected() is entry and frame.data is not None:
             blockers = [QtCore.QSignalBlocker(self.lower), QtCore.QSignalBlocker(self.upper)]
             self.lower.setValue(style["lower"])
@@ -961,8 +1105,11 @@ class MainWindow(W.QMainWindow):
         entry = self.entries[key]
         self.layers.takeItem(self.layers.row(item))
         self.entries.pop(key)
-        for graphics in entry["items"]:
-            self.canvas.removeItem(graphics)
+        worker = self.render_jobs.pop(key, None)
+        if worker is not None:
+            worker.cancel.set()
+        self.layer_errors.pop(key, None)
+        self.clear_entry(entry)
         del blocker
         self.populate_selection()
         self.request_render()
@@ -996,14 +1143,43 @@ class MainWindow(W.QMainWindow):
 
     def statistics(self):
         entry = self.selected()
-        if entry:
-            layer, selection = entry["layer"], deepcopy(entry["selection"])
-            def ready(value):
-                self.query_text.setPlainText(text_json(value))
-                self.tabs.setCurrentWidget(self.query_text)
-                self.status.showMessage("精确统计完成", 5000)
-            self.run_job(lambda cancel, progress: exact_statistics(layer, selection, cancel, progress),
-                         ready, "正在全量计算当前选择的统计…", heavy=True)
+        if not entry:
+            return
+        layer, selection, key = entry["layer"], deepcopy(entry["selection"]), entry["key"]
+
+        def ready(value):
+            target = self.entries.get(key)
+            if target is None:
+                return
+            target["statistics"] = value
+            if self.selected() is target:
+                self.populate_properties()
+                self.reveal_statistics()
+            self.status.showMessage("精确统计完成，结果位于“属性”标签页", 6000)
+
+        self.run_job(lambda cancel, progress: exact_statistics(layer, selection, cancel, progress),
+                     ready, "正在全量计算当前选择的统计…", heavy=True)
+
+    def reveal_statistics(self):
+        """Switch to the property tab and point at the fresh exact statistics."""
+        self.tabs.setCurrentWidget(self.properties)
+        item = getattr(self, "statistics_property", None)
+        if item is None:
+            return
+        self.properties.scrollToItem(item, W.QAbstractItemView.ScrollHint.PositionAtCenter)
+        for column in (0, 1):
+            item.setBackground(column, QtGui.QBrush(QtGui.QColor("#fff3b0")))
+            item.setForeground(column, QtGui.QBrush(QtGui.QColor("#7c4a03")))
+        QtCore.QTimer.singleShot(2400, lambda: self.clear_statistics_highlight(item))
+
+    @staticmethod
+    def clear_statistics_highlight(item):
+        try:
+            for column in (0, 1):
+                item.setBackground(column, QtGui.QBrush())
+                item.setForeground(column, QtGui.QBrush())
+        except RuntimeError:
+            pass  # The tree was rebuilt before the highlight expired.
 
     def cancel_operation(self):
         if self.operation:
@@ -1144,7 +1320,7 @@ class MainWindow(W.QMainWindow):
 
     def update_legend(self):
         entry = self.selected()
-        candidates = ([entry] if entry and entry in self.visible() else []) + list(reversed(self.visible()))
+        candidates = ([entry] if entry and self.is_visible(entry) else []) + list(reversed(self.visible()))
         entry = next((e for e in candidates if e["frame"] is not None and e["frame"].data is not None
                       and e["frame"].data.ndim == 2), None)
         if not entry:

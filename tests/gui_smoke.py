@@ -150,10 +150,59 @@ with tempfile.TemporaryDirectory() as directory:
     wait()
     assert window.selected()["layer"].kind == "vector"
     checks.append("layer order")
+    window.query_text.setPlainText("仅显示地图单击查询")
     window.statistics()
     wait()
-    assert "要素数" in window.query_text.toPlainText()
-    checks.append("background exact statistics")
+    assert window.query_text.toPlainText() == "仅显示地图单击查询"
+    assert window.tabs.currentWidget() is window.properties
+    statistics_item = window.statistics_property
+    assert statistics_item is not None and statistics_item.text(0) == "精确统计（全量，物理值）"
+    assert statistics_item.child(0).text(0) == "要素数"
+    assert statistics_item.background(0).style() != QtCore.Qt.BrushStyle.NoBrush
+    window.clear_statistics_highlight(statistics_item)
+    assert statistics_item.background(0).style() == QtCore.Qt.BrushStyle.NoBrush
+    checks.append("exact statistics land in the property tab with a short highlight")
+
+    from unittest.mock import patch
+    import geoquickview.app as app_module
+    real_render = app_module.render
+    cache_calls = []
+    def counting_render(*args, **kwargs):
+        cache_calls.append(args[0].kind)
+        return real_render(*args, **kwargs)
+    with patch("geoquickview.app.render", side_effect=counting_render):
+        item = window.layers.currentItem()
+        item.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        wait()
+        item.setCheckState(QtCore.Qt.CheckState.Checked)
+        wait()
+    assert not cache_calls, cache_calls
+    checks.append("visibility toggle reuses cached layer previews instead of re-reading")
+
+    independent = MainWindow()
+    independent.show_error = errors.append
+    independent.show()
+    independent.add_layer(inspect(files["raster"]))
+    independent.add_layer(inspect(files["nc"]))
+    def staggered_render(layer, *args, **kwargs):
+        time.sleep(1.0 if layer.kind == "raster" else .05)
+        return real_render(layer, *args, **kwargs)
+    with patch("geoquickview.app.render", side_effect=staggered_render):
+        deadline = time.monotonic()+25
+        split = None
+        while time.monotonic() < deadline:
+            application.processEvents()
+            time.sleep(.02)
+            by_kind = {entry["layer"].kind: entry for entry in independent.entries.values()}
+            if by_kind["nc"]["frame"] is not None and by_kind["raster"]["frame"] is None:
+                split = by_kind
+                break
+        assert split is not None, "the NetCDF preview waited for the slow raster layer"
+        assert split["raster"]["loading"] and "加载中" in split["raster"]["item"].text()
+        wait(independent)
+    assert all(entry["frame"] is not None for entry in independent.entries.values())
+    independent.close()
+    checks.append("layers render in independent jobs with a visible loading state")
     projected = str(Path(directory)/"gui-reprojected.gpkg")
     with patch("geoquickview.app.W.QDialog.exec", return_value=W.QDialog.DialogCode.Accepted), \
          patch("geoquickview.app.W.QFileDialog.getSaveFileName", return_value=(projected, "GeoPackage")):

@@ -204,15 +204,21 @@ def _selected_raster(layer, selection):
     return selected
 
 
-def _warp_frame(ds, extent, target, edge, scaled=True):
+def _warp_frame(ds, extent, target, edge, scaled=True, cancel=None):
+    if cancel and cancel.is_set():
+        raise Cancelled("已取消预览")
     nx, ny = dimensions(extent, edge)
     kwargs = dict(format="MEM", outputBounds=extent, width=nx, height=ny,
                   resampleAlg="near", outputType=gdal.GDT_Float32, dstNodata=float("nan"))
     if target:
         kwargs["dstSRS"] = target
     out = gdal.Warp("", ds, **kwargs)
+    if cancel and cancel.is_set():
+        raise Cancelled("已取消预览")
     channels = []
     for i in range(1, ds.RasterCount + 1):
+        if cancel and cancel.is_set():
+            raise Cancelled("已取消预览")
         band = out.GetRasterBand(i)
         values = band.ReadAsArray()
         valid = band.GetMaskBand().ReadAsArray() > 0
@@ -227,7 +233,7 @@ def _warp_frame(ds, extent, target, edge, scaled=True):
                  unit=ds.GetRasterBand(1).GetUnitType())
 
 
-def render(layer, selection=None, target=None, extent=None, edge=1536):
+def render(layer, selection=None, target=None, extent=None, edge=1536, cancel=None):
     selection = selection or layer.selection
     wkt, bounds = layer_space(layer, selection)
     if layer.kind == "nc" and not selection.get("variable"):
@@ -238,15 +244,17 @@ def render(layer, selection=None, target=None, extent=None, edge=1536):
     extent = extent or change_extent(bounds, wkt, target)
     if extent is None:
         raise ValueError("图层没有可用范围。")
+    if cancel and cancel.is_set():
+        raise Cancelled("已取消预览")
     if layer.kind == "vector":
-        return render_vector(layer, selection, target, extent, edge)
+        return render_vector(layer, selection, target, extent, edge, cancel=cancel)
     if layer.kind == "nc":
         from .nc import render_nc
-        return render_nc(layer, selection, target, extent, edge)
-    return _warp_frame(_selected_raster(layer, selection), extent, target, edge)
+        return render_nc(layer, selection, target, extent, edge, cancel=cancel)
+    return _warp_frame(_selected_raster(layer, selection), extent, target, edge, cancel=cancel)
 
 
-def render_vector(layer, selection, target, extent, edge):
+def render_vector(layer, selection, target, extent, edge, cancel=None):
     ds = ogr.Open(layer.path, 0)
     src = ds.GetLayerByName(selection["layer"])
     source = src.GetSpatialRef()
@@ -262,6 +270,8 @@ def render_vector(layer, selection, target, extent, edge):
     points, truncated = 0, False
     tolerance = (extent[2] - extent[0]) / edge * 0.35
     for feature in src:
+        if cancel and cancel.is_set():
+            raise Cancelled("已取消预览")
         geometry = feature.GetGeometryRef()
         if geometry is None:
             continue
