@@ -32,6 +32,10 @@ with tempfile.TemporaryDirectory(prefix="GeoQuickView-portable-") as temporary:
                 raise RuntimeError("Invalid archive path.")
         archive.extractall(directory)
     executable = directory/"GeoQuickView"/"GeoQuickView.exe"
+    # PROJ resolves proj.db relative to proj_9.dll, which PyInstaller places in
+    # _internal; the data must therefore live next to _internal, not inside it.
+    assert (directory/"GeoQuickView"/"share"/"proj"/"proj.db").is_file(), "PROJ data is not next to _internal"
+    assert not (directory/"GeoQuickView"/"_internal"/"Library"/"share"/"proj").exists()
     output = directory/"独立运行验证"
     def run(arguments):
         result = subprocess.run([str(executable), *map(str, arguments)], env=environment, cwd=directory,

@@ -69,6 +69,21 @@
 
 **验证**：`tests/test_integration.py` 新增两项：重复经度端点（0–360 含 360）合并后预览、查询与属性标注正确；非均匀纬度网格可预览全范围、查询仍取原始像元、重投影给出明确拒绝。
 
+## 4. 打包版加载示例数据报 “PROJ: Cannot find proj.db”
+
+**状态**：已修复（0.3.2，2026-11-06）。
+
+**现状**：0.3.1 便携包双击运行后点击“加载合成演示数据”，弹出“未能完成：RuntimeError: PROJ: proj_create_from_database: Cannot find proj.db”。示例数据在写入 GeoTIFF 坐标系时即失败；其它首次解析 EPSG 代码的操作同样受影响。
+
+**原因**：PyInstaller 把 `proj_9.dll` 放在 `_internal\`，而 `proj.db` 被打包进 `_internal\Library\share\proj`；PROJ 按 DLL 所在位置推算数据目录（`_internal\..\share\proj`），因此找不到数据库。原逻辑依赖启动时把 PROJ 数据复制到可写的 ASCII 临时镜像并设置 `PROJ_DATA`；一旦临时目录不可写或复制失败，`PROJ_DATA` 为空，PROJ 回落到默认查找即失败。
+
+**修复**：
+- 打包后把 PROJ 数据移动到 `dist\GeoQuickView\share\proj`（与 `_internal` 同级），PROJ 按自身 DLL 的相对位置即可命中，不再依赖环境变量或可写临时目录。
+- `geoquickview/__init__.py` 依次查找 `<bundle>\share\proj`、`<runtime>\Library\share\proj` 等位置；ASCII 路径直接使用，非 ASCII 路径继续复制到临时镜像作为后备。
+- `scripts/build_windows.py` 打包后校验 `share\proj\proj.db` 存在；`scripts/verify_bundle.py` 解压后再断言该布局，防止后续改动破坏。
+
+**验证**：新布局下把 TEMP/TMP/LOCALAPPDATA/USERPROFILE 指向不可用位置（无法生成 PROJ 镜像）仍能完成便携包 `--self-check`（栅格/NC/矢量、重投影、PNG/PDF 出图）；修复前同样条件会在 `create_samples` 的 `reference("EPSG:4326")` 处失败。
+
 ## 后续 issues
 
 后续问题继续追加到本文档；修复时沿用「状态 / 修复 / 验证」三段，并在 README 的功能表与 `docs/VALIDATION.md` 记录对应验证。

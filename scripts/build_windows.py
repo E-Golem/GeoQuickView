@@ -79,6 +79,20 @@ def main():
     PyInstaller.__main__.run([str(ROOT/"GeoQuickView.spec"), "--noconfirm", "--clean",
                              "--distpath", str(DIST), "--workpath", str(BUILD)])
     output = DIST/"GeoQuickView"
+    # PROJ resolves proj.db relative to proj_9.dll, which PyInstaller puts in
+    # _internal; the data therefore has to sit next to _internal (bundle root),
+    # not inside _internal/Library/share. The app also mirrors it to an ASCII
+    # temp directory, but this layout keeps it working when no temp directory
+    # is writable.
+    bundled = output/"_internal"/"Library"/"share"/"proj"
+    if bundled.is_dir():
+        target = output/"share"/"proj"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.move(str(bundled), str(target))
+    if not (output/"share"/"proj"/"proj.db").is_file():
+        raise RuntimeError("PROJ data must sit next to _internal (share/proj), not inside it.")
     for filename in ("README.md", "LICENSE"):
         shutil.copy2(ROOT/filename, output/filename)
     shutil.copytree(ROOT/"docs", output/"docs", dirs_exist_ok=True)

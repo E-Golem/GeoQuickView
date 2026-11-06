@@ -63,6 +63,13 @@ conda env create -f environment.yml --prefix .conda
 
 详见 [已知问题](docs/issues.md)。
 
+### 0.3.2 修复
+
+- 打包版（便携 exe）把 PROJ 数据放在 `share\proj`（与 `_internal` 同级）而不是 `_internal` 内部，PROJ 按自身 DLL 的相对位置即可找到 `proj.db`。此前若系统临时目录不允许写入或复制 PROJ 镜像失败，“加载合成演示数据”等首次坐标系查询会报“PROJ: proj_create_from_database: Cannot find proj.db”。
+- 打包后自动检查该布局；源码运行与便携包共用同一套查找逻辑，ASCII 路径仍优先使用，非 ASCII 路径继续复制到临时镜像作为后备。
+
+详见 [已知问题](docs/issues.md)。
+
 ## 适用范围
 
 - 首批验证格式：GeoTIFF、NetCDF、Shapefile、GeoJSON、GeoPackage。其它 GDAL 栅格驱动是否可用取决于发行包；HDF 多子数据集选择、NC 分组浏览尚未提供。
@@ -87,7 +94,7 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 
 `scripts\run_tests.py` 会依次执行核心集成测试与 Qt 界面检查，并把临时文件放到 `artifacts\test-tmp\`；在受限沙箱下直接运行 `python -m unittest` 会因系统临时目录不可写而失败。
 
-打包产生 `dist\GeoQuickView\GeoQuickView.exe` 和 `dist\GeoQuickView-0.3.1-windows-x64.zip`（附 `SHA256SUMS.txt`）。
+打包产生 `dist\GeoQuickView\GeoQuickView.exe` 和 `dist\GeoQuickView-0.3.2-windows-x64.zip`（附 `SHA256SUMS.txt`）。
 
 详见 [验证说明](docs/VALIDATION.md)、[需求及开源调研](docs/planning.md)、[开发说明](AGENTS.md)、[已知问题](docs/issues.md)。测试样例由代码生成，不随仓库上传真实科研数据、虚拟环境或缓存。Windows GitHub Actions 工作流负责测试、打包与便携包自检。
 

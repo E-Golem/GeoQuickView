@@ -334,6 +334,26 @@ class GeoIntegration(unittest.TestCase):
         self.assertEqual(len(frame.geometries), 34)
         self.assertNotIn("不完整", frame.note)
 
+    def test_proj_data_lookup_covers_source_and_frozen_layouts(self):
+        """The frozen bundle keeps PROJ data next to _internal; source uses Library/share."""
+        import geoquickview
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root/"bundle"/"_internal"/"Library"/"share"/"proj"
+            legacy.mkdir(parents=True)
+            (legacy/"proj.db").write_bytes(b"x")
+            frozen = root/"bundle"/"_internal"
+            self.assertEqual(geoquickview._proj_data(frozen.parent, frozen), legacy)
+            shared = root/"bundle"/"share"/"proj"
+            shared.mkdir(parents=True)
+            (shared/"proj.db").write_bytes(b"x")
+            self.assertEqual(geoquickview._proj_data(frozen.parent, frozen), shared)
+            conda = root/".conda"
+            conda_proj = conda/"Library"/"share"/"proj"
+            conda_proj.mkdir(parents=True)
+            (conda_proj/"proj.db").write_bytes(b"x")
+            self.assertEqual(geoquickview._proj_data(conda.parent, conda), conda_proj)
+
     def test_non_ascii_runtime_path_does_not_break_proj_lookup(self):
         """PROJ cannot read proj.db through a non-ASCII path.
 

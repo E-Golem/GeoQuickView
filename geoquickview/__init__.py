@@ -5,7 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 _PROJ_KEYS = ("PROJ_DATA", "PROJ_LIB")
 
@@ -86,13 +86,29 @@ if os.name == "nt" and hasattr(os, "add_dll_directory"):
     os.environ["PATH"] = str(_binary) + os.pathsep + os.environ.get("PATH", "")
     _dll_handles.append(os.add_dll_directory(str(_binary)))
 
+
+def _proj_data(*roots):
+    """Locate the bundled PROJ data in source and frozen layouts.
+
+    Frozen (PyInstaller onedir) bundles place proj_9.dll in `_internal` and
+    resolve `share/proj` relative to it, so the data must live next to
+    `_internal` (the directory holding the exe). Source checkouts keep the conda
+    layout (`Library/share/proj`).
+    """
+    for root in roots:
+        for candidate in (root / "share" / "proj", root / "Library" / "share" / "proj"):
+            if (candidate / "proj.db").is_file():
+                return candidate
+    return None
+
+
 # An inherited PROJ_DATA/PROJ_LIB may point at unrelated or removed software;
 # never trust the ambient value for a self-contained app.
 for _key in _PROJ_KEYS:
     os.environ.pop(_key, None)
 
-_proj = _library / "share" / "proj"
-if _proj.is_dir():
+_proj = _proj_data(_runtime.parent, _runtime)
+if _proj is not None:
     _target = _proj if _is_ascii(_proj) else _ascii_mirror(_proj)
     if _target is not None:
         os.environ["PROJ_DATA"] = str(_target)

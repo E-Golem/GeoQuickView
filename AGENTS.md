@@ -21,7 +21,7 @@ Windows 离线地理数据快看工具（PySide6 + GDAL + xarray/h5netcdf）。�
 - **不要手动把 `PROJ_DATA`/`PROJ_LIB` 指向项目内的 `proj` 目录**，那样会立刻触发 `Cannot find proj.db`。
 - 该行为由 `test_non_ascii_runtime_path_does_not_break_proj_lookup` 覆盖：断言 PROJ 变量只指向含 `proj.db` 的 ASCII 路径，并在父进程持有无效 `PROJ_DATA` 时仍能解析 `EPSG:4326`/`EPSG:3857`。
 
-> 打包版同样适用：便携包在中文目录下会镜像 PROJ 数据后正常运行。
+> **打包版布局（重要）**：PyInstaller 的 onedir 布局把 `proj_9.dll` 放在 `_internal\`，而 PROJ 按 DLL 的相对位置查找 `share\proj`。因此 `scripts\build_windows.py` 在打包后把 PROJ 数据移动到 `dist\GeoQuickView\share\proj`（与 `_internal` 同级），并对该布局做断言；`verify_bundle.py` 解压后再次断言。**不要**把它移回 `_internal\Library\share\proj`，否则便携版在无法写入临时目录时会报 `PROJ: Cannot find proj.db`。源码运行仍使用 `.conda\Library\share\proj` 并通过 `geoquickview._proj_data` 统一查找。
 
 ## 运行
 
@@ -39,9 +39,9 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 .\.conda\python.exe scripts\run_tests.py --gui
 ```
 
-`scripts\run_tests.py` 会先跑 22 项核心集成测试，再跑 22 组 Qt 界面检查。**不要直接使用 `python -m unittest`**：本工具在受限沙箱下运行，默认系统临时目录可被创建但不可写，而测试需要在其中生成合成栅格/NC。该脚本把 `tempfile` 重定向到 `artifacts\test-tmp\`，两种环境都能跑。
+`scripts\run_tests.py` 会先跑 23 项核心集成测试，再跑 22 组 Qt 界面检查。**不要直接使用 `python -m unittest`**：本工具在受限沙箱下运行，默认系统临时目录可被创建但不可写，而测试需要在其中生成合成栅格/NC。该脚本把 `tempfile` 重定向到 `artifacts\test-tmp\`，两种环境都能跑。
 
-当前基线：**22 项核心测试 + 22 组界面检查全部通过**。
+当前基线：**23 项核心测试 + 22 组界面检查全部通过**。
 
 ## 打包与发布
 
