@@ -103,7 +103,9 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 .\.conda\python.exe scripts\verify_bundle.py
 ~~~
 
-`scripts\run_tests.py` 会依次执行核心集成测试与 Qt 界面检查，并把临时文件放到 `artifacts\test-tmp\`；在受限沙箱下直接运行 `python -m unittest` 会因系统临时目录不可写而失败。
+`scripts\run_tests.py` 会依次执行 28 项核心与健壮性测试、23 组 Qt 界面检查，并把临时文件放到 `artifacts\test-tmp\`；在受限沙箱下直接运行 `python -m unittest` 会因系统临时目录不可写而失败。
+
+`tests\test_robustness.py` 覆盖安全/健壮性关注点：畸形输入在子进程中运行（原生解析器崩溃与死循环会被捕获，并返回可读错误）、输入文件不被改写、重投影不残留临时文件、核心流程不访问网络；界面检查同时验证打开畸形文件后窗口仍可用。
 
 打包产生 `dist\GeoQuickView\GeoQuickView.exe` 和 `dist\GeoQuickView-0.3.2-windows-x64.zip`（附 `SHA256SUMS.txt`）。
 

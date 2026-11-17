@@ -241,6 +241,16 @@ with tempfile.TemporaryDirectory() as directory:
     assert not window.selector.isEnabled()
     assert "temperature" in window.selected()["shown_metadata"]["变量"]
     checks.append("metadata-only NetCDF opens without a renderable variable")
+    broken = Path(directory)/"broken-input.tif"
+    broken.write_bytes(b"\x00" * 512)
+    assert not errors
+    window.open_path(str(broken))
+    wait()
+    assert len(errors) == 1, errors
+    last_line = errors.pop().strip().splitlines()[-1]
+    assert last_line.strip() and "Traceback" not in last_line, last_line
+    assert window.entries, "the window lost its layers after a malformed file"
+    checks.append("malformed file reports a readable error and the window stays usable")
     output = Path("artifacts/gui-controls.png")
     output.parent.mkdir(exist_ok=True)
     window.grab().save(str(output))

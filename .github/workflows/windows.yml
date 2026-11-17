@@ -26,7 +26,7 @@ jobs:
           channel-priority: strict
           auto-activate: false
           conda-solver: libmamba
-      - name: Core integration and GUI controls
+      - name: Core, robustness and GUI checks
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = "offscreen"

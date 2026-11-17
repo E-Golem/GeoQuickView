@@ -136,6 +136,19 @@ def band_info(path, index):
 
 
 def inspect(path):
+    """Inspect one data file, translating low-level decode failures to a readable error.
+
+    GDAL's Python bindings can surface a raw UnicodeDecodeError when a driver
+    tries to read a malformed metadata block; that message is meaningless to a
+    user, so present it as a normal invalid-file error instead.
+    """
+    try:
+        return _inspect(path)
+    except UnicodeDecodeError:
+        raise ValueError("文件格式无法识别或元数据编码无效；请确认这是有效的地理数据文件。") from None
+
+
+def _inspect(path):
     path = str(Path(path).resolve())
     if not Path(path).is_file():
         raise ValueError("请选择存在的数据文件。")

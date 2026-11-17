@@ -39,9 +39,11 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 .\.conda\python.exe scripts\run_tests.py --gui
 ```
 
-`scripts\run_tests.py` 会先跑 23 项核心集成测试，再跑 22 组 Qt 界面检查。**不要直接使用 `python -m unittest`**：本工具在受限沙箱下运行，默认系统临时目录可被创建但不可写，而测试需要在其中生成合成栅格/NC。该脚本把 `tempfile` 重定向到 `artifacts\test-tmp\`，两种环境都能跑。
+`scripts\run_tests.py` 会先跑 28 项核心与健壮性测试，再跑 23 组 Qt 界面检查。**不要直接使用 `python -m unittest`**：本工具在受限沙箱下运行，默认系统临时目录可被创建但不可写，而测试需要在其中生成合成栅格/NC。该脚本把 `tempfile` 重定向到 `artifacts\test-tmp\`，两种环境都能跑。
 
-当前基线：**23 项核心测试 + 22 组界面检查全部通过**。
+`tests\test_robustness.py` 把畸形输入放到**子进程**里执行：原生解析器崩溃会表现为子进程非零退出码，死循环由子进程超时捕获，父进程测试继续运行。修改文件读取逻辑时，请同时补充该文件的畸形输入用例。
+
+当前基线：**28 项核心/健壮性测试 + 23 组界面检查全部通过**。
 
 ## 打包与发布
 
