@@ -51,6 +51,17 @@ with patch("geoquickview.app.QtGui.QDesktopServices.openUrl") as open_url:
     window.repository_button.click()
     assert open_url.call_args.args[0].toString() == "https://github.com/E-Golem/GeoQuickView"
 checks.append("startup province basemap, no offline badge and GitHub button")
+screen = window.screen() or QtGui.QGuiApplication.primaryScreen()
+available = screen.availableGeometry()
+assert window.width() == available.width()//2, (window.size(), available)
+assert window.height() == available.height()//2, (window.size(), available)
+frame = window.frameGeometry()
+assert abs(frame.center().x()-available.center().x()) <= 2, (frame, available)
+assert abs(frame.center().y()-available.center().y()) <= 2, (frame, available)
+checks.append("window opens at half of the screen, centred")
+window.resize(1400, 900)
+window.findChild(W.QSplitter).setSizes([220, 720, 500])
+application.processEvents()
 window.axes_enabled.setChecked(True)
 wait()
 assert window.canvas.getPlotItem().getAxis("bottom").isVisible()
@@ -182,6 +193,8 @@ with tempfile.TemporaryDirectory() as directory:
     independent = MainWindow()
     independent.show_error = errors.append
     independent.show()
+    independent.resize(1200, 800)
+    application.processEvents()
     independent.add_layer(inspect(files["raster"]))
     independent.add_layer(inspect(files["nc"]))
     def staggered_render(layer, *args, **kwargs):
@@ -225,6 +238,8 @@ with tempfile.TemporaryDirectory() as directory:
     standalone = MainWindow()
     standalone.show_error = errors.append
     standalone.show()
+    standalone.resize(1200, 800)
+    application.processEvents()
     standalone.add_layer(inspect(cases["auxiliary"]))
     wait(standalone)
     assert standalone.selector.currentText() == "temperature"

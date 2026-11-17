@@ -55,9 +55,8 @@ class MainWindow(W.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"GeoQuickView  {__version__}")
-        self.resize(1440, 900)
-        self.setMinimumSize(1080, 720)
         self.setAcceptDrops(True)
+        self._center_on_screen = False
         self.pool = QtCore.QThreadPool(self)
         # Layers render independently: keep enough workers that one slow read
         # cannot hold back the others (the early view is what matters).
@@ -82,6 +81,7 @@ class MainWindow(W.QMainWindow):
         self._build()
         self._style()
         self._menus()
+        self.apply_default_geometry()
         self.populate_selection()
         self.show_basemap_home()
 
@@ -89,6 +89,41 @@ class MainWindow(W.QMainWindow):
     def rendering(self):
         """True while any layer preview is still being produced."""
         return bool(self.render_jobs)
+
+    @staticmethod
+    def _default_screen():
+        """The screen under the pointer, falling back to the primary screen."""
+        screen = QtGui.QGuiApplication.screenAt(QtGui.QCursor.pos())
+        return screen or QtGui.QGuiApplication.primaryScreen()
+
+    def apply_default_geometry(self):
+        """Open at half of the available screen area, centred on that screen."""
+        screen = self._default_screen()
+        if screen is None:
+            self.resize(960, 540)
+            return
+        available = screen.availableGeometry()
+        width, height = max(1, available.width()//2), max(1, available.height()//2)
+        hint = self.minimumSizeHint()
+        self.setMinimumSize(min(width, hint.width()), min(height, hint.height()))
+        geometry = QtCore.QRect(0, 0, width, height)
+        geometry.moveCenter(available.center())
+        self.setGeometry(geometry)
+        self._center_on_screen = True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._center_on_screen:
+            return
+        # Recentre once the native frame exists, so the whole window (title bar
+        # included) sits in the middle of the screen rather than its client area.
+        self._center_on_screen = False
+        screen = self.screen() or self._default_screen()
+        if screen is None:
+            return
+        frame = self.frameGeometry()
+        frame.moveCenter(screen.availableGeometry().center())
+        self.move(frame.topLeft())
 
     def _build(self):
         root = W.QWidget()
@@ -103,11 +138,11 @@ class MainWindow(W.QMainWindow):
         brand = W.QLabel("GeoQuickView")
         brand.setObjectName("brand")
         bar.addWidget(brand)
-        sub = W.QLabel("地理数据 · 轻松查看")
+        sub = W.QLabel("地理数据，轻松查看")
         sub.setObjectName("subtitle")
         bar.addWidget(sub)
         bar.addStretch()
-        self.repository_button = W.QPushButton("GitHub 仓库 ↗")
+        self.repository_button = W.QPushButton("GitHub ↗")
         self.repository_button.setObjectName("repository")
         self.repository_button.setToolTip(REPOSITORY_URL)
         self.repository_button.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl(REPOSITORY_URL)))
@@ -299,7 +334,12 @@ class MainWindow(W.QMainWindow):
         style_layout.addWidget(self.histogram)
         style_layout.addWidget(W.QLabel("此处是预览抽样。\n全量值范围请使用“精确统计”。"))
         style_layout.addStretch()
-        self.tabs.addTab(appearance, "显示")
+        # Scroll the style controls so a half-screen window can still reach them.
+        appearance_scroll = W.QScrollArea()
+        appearance_scroll.setWidgetResizable(True)
+        appearance_scroll.setFrameShape(W.QFrame.Shape.NoFrame)
+        appearance_scroll.setWidget(appearance)
+        self.tabs.addTab(appearance_scroll, "显示")
         self.query_text = W.QPlainTextEdit()
         self.query_text.setReadOnly(True)
         self.query_text.setPlaceholderText("单击地图，读取原始分辨率的像元值或附近要素。")
