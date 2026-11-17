@@ -97,13 +97,14 @@ class MainWindow(W.QMainWindow):
         return screen or QtGui.QGuiApplication.primaryScreen()
 
     def apply_default_geometry(self):
-        """Open at half of the available screen area, centred on that screen."""
+        """Open at two thirds of the available screen area, centred on that screen."""
         screen = self._default_screen()
         if screen is None:
-            self.resize(960, 540)
+            self.resize(960, 640)
             return
         available = screen.availableGeometry()
-        width, height = max(1, available.width()//2), max(1, available.height()//2)
+        width = max(1, available.width()*2//3)
+        height = max(1, available.height()*2//3)
         hint = self.minimumSizeHint()
         self.setMinimumSize(min(width, hint.width()), min(height, hint.height()))
         geometry = QtCore.QRect(0, 0, width, height)
@@ -334,7 +335,7 @@ class MainWindow(W.QMainWindow):
         style_layout.addWidget(self.histogram)
         style_layout.addWidget(W.QLabel("此处是预览抽样。\n全量值范围请使用“精确统计”。"))
         style_layout.addStretch()
-        # Scroll the style controls so a half-screen window can still reach them.
+        # Scroll the style controls so a smaller window can still reach them.
         appearance_scroll = W.QScrollArea()
         appearance_scroll.setWidgetResizable(True)
         appearance_scroll.setFrameShape(W.QFrame.Shape.NoFrame)
