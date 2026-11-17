@@ -55,6 +55,8 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 
 GitHub Actions（`.github/workflows/windows.yml`）在云端 Windows runner 上执行同一组脚本；推送 `v*` 标签时才发布 Release。
 
+`build_windows.py` 会在包内写入 `首次运行说明.txt`（说明 SmartScreen 提示与目录结构）和 `解除阻止.cmd`（对整包执行 `Unblock-File`，清除“来自 Internet”标记）。发行包未签名，无法从程序内部消除 SmartScreen；只有受信任的代码签名证书能对其它电脑消除该提示。
+
 ## 代码结构
 
 | 路径 | 职责 |

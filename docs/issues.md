@@ -84,6 +84,20 @@
 
 **验证**：新布局下把 TEMP/TMP/LOCALAPPDATA/USERPROFILE 指向不可用位置（无法生成 PROJ 镜像）仍能完成便携包 `--self-check`（栅格/NC/矢量、重投影、PNG/PDF 出图）；修复前同样条件会在 `create_samples` 的 `reference("EPSG:4326")` 处失败。
 
+## 5. 首次运行被 Windows SmartScreen 拦截
+
+**状态**：已处理（说明与工具，非程序缺陷，2026-11-17）。
+
+**现状**：双击便携版 GeoQuickView.exe 时出现“Windows 已保护你的电脑 / Microsoft Defender SmartScreen 阻止了无法识别的应用启动”，只有“不运行”按钮，需要展开“更多信息”才能继续。
+
+**原因**：发行包未做代码签名。Windows 对未签名、尚未建立下载信誉的可执行文件默认拦截；从网络下载的 zip 解压后，文件还会带上“来自 Internet”标记（`Zone.Identifier`），更容易触发。这不是程序缺陷，也不代表文件被感染。
+
+**处理**：
+- 提示中点击“更多信息”→“仍要运行”即可启动；若文件来自下载，先右键 zip → 属性 → 勾选“解除锁定”再解压。
+- 发行包新增 `首次运行说明.txt` 和 `解除阻止.cmd`（对整包执行 `Unblock-File` 清除下载标记），由 `build_windows.py` 自动生成并随 zip 分发。
+- `README.md` 增加“首次运行与 Windows SmartScreen”说明；仍保留 `SHA256SUMS.txt` 供核对文件完整性。
+- 彻底消除（对其它电脑）只能使用受信任的代码签名证书签名 exe；本项目暂未购买证书。若后续获得证书，可加签名步骤后再打包。
+
 ## 后续 issues
 
 后续问题继续追加到本文档；修复时沿用「状态 / 修复 / 验证」三段，并在 README 的功能表与 `docs/VALIDATION.md` 记录对应验证。

@@ -71,6 +71,45 @@ def notices(output):
     return records
 
 
+FIRST_RUN_NOTE = """GeoQuickView 便携版 · 首次运行说明
+
+1. 双击 GeoQuickView.exe 时，如果 Windows 弹出
+   “Windows 已保护你的电脑（Microsoft Defender SmartScreen）”：
+   这是 Windows 对未签名、尚未建立信誉的程序的通用提示，不代表文件有病毒。
+   - 点击提示中的“更多信息”，再点击“仍要运行”；
+   - 或者关闭提示后，双击本目录中的“解除阻止.cmd”，再重新打开 GeoQuickView.exe。
+
+2. 如果本目录是从网络下载的 zip 解压出来的，更彻底的做法是：
+   解压前右键 zip → 属性 → 勾选“解除锁定” → 确定，然后再解压。
+   已经解压也没关系，运行一次“解除阻止.cmd”即可清除下载标记。
+
+3. 本程序未进行商业代码签名，在每台新电脑上首次运行时都可能出现该提示。
+   只有使用受信任的代码签名证书签名后，才能对所有电脑消除提示。
+
+4. 程序必须保留以下内容，不要只复制 exe：
+   - GeoQuickView.exe
+   - _internal 文件夹
+   - share 文件夹（PROJ 投影数据，缺少时坐标系解析会失败）
+
+5. 数据始终在本机读取；程序不会上传文件，也不会修改原始数据。
+"""
+
+UNBLOCK_SCRIPT = """@echo off
+setlocal
+echo Clearing the Windows "downloaded from the internet" mark for this folder...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -LiteralPath '%~dp0' -Recurse -File -Force | Unblock-File"
+echo.
+echo Done. You can now start GeoQuickView.exe
+pause
+"""
+
+
+def write_first_run_files(output):
+    """Explain the SmartScreen prompt and ship a one-click unblock helper."""
+    (output/"首次运行说明.txt").write_text(FIRST_RUN_NOTE, encoding="utf-8-sig")
+    (output/"解除阻止.cmd").write_text(UNBLOCK_SCRIPT, encoding="ascii")
+
+
 def main():
     if os.name != "nt":
         raise SystemExit("Build the Windows package on Windows.")
@@ -93,6 +132,7 @@ def main():
         shutil.move(str(bundled), str(target))
     if not (output/"share"/"proj"/"proj.db").is_file():
         raise RuntimeError("PROJ data must sit next to _internal (share/proj), not inside it.")
+    write_first_run_files(output)
     for filename in ("README.md", "LICENSE"):
         shutil.copy2(ROOT/filename, output/filename)
     shutil.copytree(ROOT/"docs", output/"docs", dirs_exist_ok=True)
