@@ -52,6 +52,59 @@ class Worker(QtCore.QRunnable):
             self.signals.finished.emit()
 
 
+def directory_writable(directory):
+    """True when a probe file can be created in the directory (ACL-aware)."""
+    directory = Path(directory)
+    if not directory.is_dir():
+        return False
+    probe = directory/f".geoquickview-write-{os.getpid()}-{threading.get_ident()}"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+        return False
+
+
+def unique_output_path(directory, stem, suffix):
+    """A non-existing file name so the no-overwrite rule never blocks the first try."""
+    candidate = Path(directory)/(stem+suffix)
+    index = 1
+    while candidate.exists():
+        candidate = Path(directory)/f"{stem}_{index}{suffix}"
+        index += 1
+    return candidate
+
+
+def default_output_directory():
+    """A folder the current user can write to, preferring Documents."""
+    candidates = []
+    try:
+        documents = QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.StandardLocation.DocumentsLocation)
+    except Exception:
+        documents = ""
+    if documents:
+        candidates.append(Path(documents)/"GeoQuickView 导出")
+    try:
+        candidates.append(Path.home()/"GeoQuickView 导出")
+    except RuntimeError:
+        pass
+    candidates.append(Path(tempfile.gettempdir())/"GeoQuickView 导出")
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        if directory_writable(candidate):
+            return candidate
+    return Path(tempfile.gettempdir())
+
+
 class MapCrsDialog(W.QDialog):
     """Pick a common projection, type a custom one, or read it from a file."""
 
@@ -134,6 +187,7 @@ class MainWindow(W.QMainWindow):
         self.setWindowTitle(f"GeoQuickView  {__version__}")
         self.setAcceptDrops(True)
         self._center_on_screen = False
+        self.output_directory = default_output_directory()
         self.pool = QtCore.QThreadPool(self)
         # Layers render independently: keep enough workers that one slow read
         # cannot hold back the others (the early view is what matters).
@@ -536,10 +590,46 @@ class MainWindow(W.QMainWindow):
     def show_error(self, message):
         if "已取消" in message:
             self.status.showMessage("任务已取消", 5000)
-        else:
-            box = W.QMessageBox(W.QMessageBox.Icon.Warning, "未能完成", message.splitlines()[-1], parent=self)
+            return
+        lowered = message.lower()
+        if "permission denied" in lowered or "拒绝访问" in message or "errno 13" in lowered:
+            box = W.QMessageBox(
+                W.QMessageBox.Icon.Warning, "无法写入文件",
+                "没有写入所选文件夹的权限。\n"
+                "请改选“文档”或桌面下的文件夹，或使用默认导出文件夹：\n"
+                f"{self.output_directory}", parent=self)
             box.setDetailedText(message)
             box.exec()
+            return
+        box = W.QMessageBox(W.QMessageBox.Icon.Warning, "未能完成", message.splitlines()[-1], parent=self)
+        box.setDetailedText(message)
+        box.exec()
+
+    def choose_save_path(self, title, suggestion, file_filter):
+        """Ask for an output path and retry on the writable default when needed."""
+        suggestion = Path(suggestion)
+        path = str(suggestion)
+        for _ in range(3):
+            chosen, _ = W.QFileDialog.getSaveFileName(self, title, path, file_filter)
+            if not chosen:
+                return ""
+            chosen_path = Path(chosen)
+            if chosen_path.exists():
+                W.QMessageBox.information(
+                    self, "文件已存在",
+                    f"{chosen_path.name} 已存在。为避免覆盖已保存的文件，请换一个文件名。")
+                path = str(unique_output_path(chosen_path.parent, chosen_path.stem, chosen_path.suffix))
+                continue
+            parent = chosen_path.parent
+            if directory_writable(parent):
+                return chosen
+            W.QMessageBox.information(
+                self, "该文件夹不可写",
+                f"没有写入权限：\n{parent}\n\n"
+                "请改选“文档”或桌面下的文件夹。\n"
+                f"程序默认导出文件夹：\n{self.output_directory}")
+            path = str(self.output_directory/Path(chosen).name)
+        return ""
 
     def choose_files(self):
         paths, _ = W.QFileDialog.getOpenFileNames(self, "打开地理数据", "",
@@ -1357,10 +1447,15 @@ class MainWindow(W.QMainWindow):
         layout.addRow(buttons)
         if dialog.exec() != W.QDialog.DialogCode.Accepted:
             return
-        destination, _ = W.QFileDialog.getSaveFileName(self, "选择新输出文件", str(Path(entry["layer"].path).with_name(
-            Path(entry["layer"].path).stem+"_reprojected"+suffix)), f"输出文件 (*{suffix})")
+        source = Path(entry["layer"].path)
+        folder = source.parent if directory_writable(source.parent) else self.output_directory
+        destination = self.choose_save_path(
+            "选择新输出文件", unique_output_path(folder, source.stem+"_reprojected", suffix),
+            f"输出文件 (*{suffix})")
         if not destination:
             return
+        if not Path(destination).suffix:
+            destination += suffix
         layer, selection = entry["layer"], deepcopy(entry["selection"])
         if layer.kind == "raster" and all_bands.isChecked():
             selection["bands"] = list(range(1, len(layer.choices)+1))
@@ -1373,6 +1468,9 @@ class MainWindow(W.QMainWindow):
 
     def export_dialog(self):
         if not self.visible() and not (self.basemap_enabled.isChecked() and self.target):
+            W.QMessageBox.information(self, "没有可导出的图层",
+                                      "请先打开数据并勾选可见图层，或启用中国省界底图。")
+            self.status.showMessage("没有可导出的图层", 6000)
             return
         dialog = W.QDialog(self)
         dialog.setWindowTitle("通用研究区地图")
@@ -1415,9 +1513,15 @@ class MainWindow(W.QMainWindow):
         form.addRow(buttons)
         if dialog.exec() != W.QDialog.DialogCode.Accepted:
             return
-        destination, _ = W.QFileDialog.getSaveFileName(self, "导出地图", "map.png", "PNG (*.png);;PDF (*.pdf)")
+        selected = self.selected()
+        stem = Path(selected["layer"].name).stem if selected else "map"
+        destination = self.choose_save_path(
+            "导出地图", unique_output_path(self.output_directory, stem or "map", ".png"),
+            "PNG (*.png);;PDF (*.pdf)")
         if not destination:
             return
+        if not Path(destination).suffix:
+            destination += ".png"
         entries = [(entry["layer"], deepcopy(entry["selection"]), deepcopy(entry["style"]))
                    for entry in self.visible() if boundaries.isChecked() or entry["layer"].kind != "vector"]
         if boundaries.isChecked() and self.basemap_enabled.isChecked() and self.target:

@@ -9,7 +9,7 @@ import time
 
 import geoquickview
 from PySide6 import QtCore, QtGui, QtWidgets as W
-from geoquickview.app import MainWindow, MapCrsDialog
+from geoquickview.app import MainWindow, MapCrsDialog, directory_writable
 from geoquickview.data import inspect, reference, crs_from_file
 from geoquickview.samples import create_samples
 import numpy as np
@@ -240,12 +240,37 @@ with tempfile.TemporaryDirectory() as directory:
     checks.append("reprojection dialog saves and opens result")
     map_file = str(Path(directory)/"gui-map.png")
     with patch("geoquickview.app.W.QDialog.exec", return_value=W.QDialog.DialogCode.Accepted), \
-         patch("geoquickview.app.W.QFileDialog.getSaveFileName", return_value=(map_file, "PNG")), \
+         patch("geoquickview.app.W.QFileDialog.getSaveFileName", return_value=(map_file, "PNG")) as save_dialog, \
          patch("geoquickview.app.W.QMessageBox.information", return_value=W.QMessageBox.StandardButton.Ok):
         window.export_dialog()
         wait()
     assert Path(map_file).stat().st_size > 5000
-    checks.append("map export dialog writes PNG")
+    assert Path(save_dialog.call_args.args[2]).parent == window.output_directory
+    checks.append("map export defaults to a writable folder and writes PNG")
+    assert directory_writable(window.output_directory)
+    blocker = Path(directory)/"not-a-folder"
+    blocker.write_text("x", encoding="utf-8")
+    fallback = str(window.output_directory/"fallback.png")
+    with patch("geoquickview.app.W.QFileDialog.getSaveFileName",
+               side_effect=[(str(blocker/"map.png"), "PNG"), (fallback, "PNG")]) as retry_dialog, \
+         patch("geoquickview.app.W.QMessageBox.information") as notice:
+        chosen = window.choose_save_path("导出地图", str(blocker/"map.png"), "PNG (*.png)")
+    assert chosen == fallback and notice.called
+    assert Path(retry_dialog.call_args.args[2]).parent == window.output_directory
+    existing = window.output_directory/"exists.png"
+    existing.write_bytes(b"x")
+    fresh = str(window.output_directory/"fresh.png")
+    with patch("geoquickview.app.W.QFileDialog.getSaveFileName",
+               side_effect=[(str(existing), "PNG"), (fresh, "PNG")]), \
+         patch("geoquickview.app.W.QMessageBox.information") as notice:
+        chosen = window.choose_save_path("导出地图", str(existing), "PNG (*.png)")
+    assert chosen == fresh and notice.called
+    existing.unlink()
+    checks.append("existing output names are re-prompted instead of overwriting")
+    with patch("geoquickview.app.W.QMessageBox.exec") as exec_box:
+        MainWindow.show_error(window, "Traceback (most recent call last):\nPermissionError: [Errno 13] Permission denied: 'C:\\\\Program Files\\\\x.png'")
+    assert exec_box.called
+    checks.append("unwritable export folder is explained and retried in the default folder")
     from tests.nc_cases import nc_cases
     cases = nc_cases(directory)
     standalone = MainWindow()
