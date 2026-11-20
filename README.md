@@ -67,6 +67,13 @@ conda env create -f environment.yml --prefix .conda
 
 界面中的色标、拉伸和直方图来自当前预览抽样；“精确统计”才会扫描所选波段/切片的全部像元。原始存储值、缩放后的物理值、已有缓存统计分别展示。预览重投影不会修改输入数据。
 
+### 0.4.1 修复
+
+- 导出地图与重投影的保存对话框默认指向“文档\GeoQuickView 导出”（不可用时回退到用户目录、临时目录），不再依赖程序所在目录或当前工作目录；便携版放在只读位置也能导出。
+- 选择没有写权限的文件夹时给出提示并自动回到可写文件夹重新选择；后台遇到权限错误时显示“无法写入文件”和可用的默认文件夹，而不是原始的 `Permission denied`。
+- 输出文件重名时默认名自动避开已有文件（`名称.png`、`名称_1.png`…）；手动选择已存在的文件会提示改名，避免“文件已存在”导致导出失败（导出与重投影均适用）。
+- 没有可见图层时点击“导出地图”，会说明需要先打开数据，而不是没有反应。
+
 ### 0.4.0 新增
 
 - **无后缀 WRF/NetCDF**：按文件内容（HDF5 / CDF 签名）识别，不再依赖 `.nc` 扩展名。WRF 输出用 `MAP_PROJ`、`DX/DY`、`CEN_LAT/CEN_LON`、`TRUELAT/STAND_LON` 推导 Lambert/极射/墨卡托/经纬度网格与坐标系，可直接预览、查询、统计并叠加省界底图；`Times` 字符数组作为时间标签。
@@ -116,7 +123,7 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 
 `tests\test_robustness.py` 覆盖安全/健壮性关注点：畸形输入在子进程中运行（原生解析器崩溃与死循环会被捕获，并返回可读错误）、输入文件不被改写、重投影不残留临时文件、核心流程不访问网络；界面检查同时验证打开畸形文件后窗口仍可用。
 
-打包产生 `dist\GeoQuickView\GeoQuickView.exe` 和 `dist\GeoQuickView-0.4.0-windows-x64.zip`（附 `SHA256SUMS.txt`）。
+打包产生 `dist\GeoQuickView\GeoQuickView.exe` 和 `dist\GeoQuickView-0.4.1-windows-x64.zip`（附 `SHA256SUMS.txt`）。
 
 详见 [验证说明](docs/VALIDATION.md)、[需求及开源调研](docs/planning.md)、[开发说明](AGENTS.md)、[已知问题](docs/issues.md)。测试样例由代码生成，不随仓库上传真实科研数据、虚拟环境或缓存。Windows GitHub Actions 工作流负责测试、打包与便携包自检。
 

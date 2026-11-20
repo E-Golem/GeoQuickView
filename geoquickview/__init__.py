@@ -5,7 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 _PROJ_KEYS = ("PROJ_DATA", "PROJ_LIB")
 
