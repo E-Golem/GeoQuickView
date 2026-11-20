@@ -89,7 +89,6 @@ class Robustness(unittest.TestCase):
             ("empty.tif", b""),
             ("random.tif", random_bytes),
             ("truncated.tif", raster[: len(raster)//3]),
-            ("hdf5_as_tif.tif", netcdf),
             ("broken.nc", random_bytes),
             ("truncated.nc", netcdf[:512]),
             ("empty.geojson", b""),

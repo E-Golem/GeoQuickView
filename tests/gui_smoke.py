@@ -9,9 +9,11 @@ import time
 
 import geoquickview
 from PySide6 import QtCore, QtGui, QtWidgets as W
-from geoquickview.app import MainWindow
-from geoquickview.data import inspect
+from geoquickview.app import MainWindow, MapCrsDialog
+from geoquickview.data import inspect, reference, crs_from_file
 from geoquickview.samples import create_samples
+import numpy as np
+from osgeo import gdal
 
 application = W.QApplication([])
 for filename in ("msyh.ttc", "segoeui.ttf"):
@@ -121,12 +123,23 @@ with tempfile.TemporaryDirectory() as directory:
     checks.append("manual colour limits")
     from unittest.mock import patch
     previous_crs = window.target
-    with patch("geoquickview.app.W.QInputDialog.getText", return_value=("EPSG:3857", True)), \
+    with patch("geoquickview.app.MapCrsDialog.exec", return_value=W.QDialog.DialogCode.Accepted), \
+         patch("geoquickview.app.MapCrsDialog.value", return_value="EPSG:3857"), \
          patch("geoquickview.app.change_extent", side_effect=ValueError("test invalid domain")):
         window.choose_crs()
     assert window.target == previous_crs
     assert errors.pop() == "test invalid domain"
     checks.append("failed map projection leaves previous CRS intact")
+    with patch("geoquickview.app.MapCrsDialog.exec", return_value=W.QDialog.DialogCode.Accepted), \
+         patch("geoquickview.app.MapCrsDialog.value", return_value="EPSG:3857"):
+        window.choose_crs()
+    wait()
+    assert reference(window.target).IsSame(reference("EPSG:3857"))
+    assert "3857" in window.crs_label.text() or "Pseudo-Mercator" in window.crs_label.text()
+    window.apply_map_crs(previous_crs)
+    wait()
+    assert reference(window.target).IsSame(reference(previous_crs))
+    checks.append("map projection dialog applies a common projection")
     window.layers.currentItem().setCheckState(QtCore.Qt.CheckState.Unchecked)
     wait()
     window.style_changed()
@@ -256,6 +269,25 @@ with tempfile.TemporaryDirectory() as directory:
     assert not window.selector.isEnabled()
     assert "temperature" in window.selected()["shown_metadata"]["变量"]
     checks.append("metadata-only NetCDF opens without a renderable variable")
+    dialog = MapCrsDialog(window, window.crs_label.text(), window.basemap.wkt)
+    assert dialog.combo.count() >= 5
+    dialog.close()
+    assert reference(crs_from_file(files["raster"])).IsSame(reference(inspect(files["raster"]).wkt))
+    unref = Path(directory)/"no_crs.tif"
+    ds = gdal.GetDriverByName("GTiff").Create(str(unref), 32, 24, 1)
+    ds.SetGeoTransform((70, .25, 0, 55, 0, -.25))
+    ds.GetRasterBand(1).WriteArray(np.arange(32*24, dtype=np.float32).reshape(24, 32))
+    ds = None
+    window.add_layer(inspect(unref))
+    wait()
+    unref_entry = window.selected()
+    assert unref_entry["layer"].wkt and unref_entry["frame"] is not None
+    assumed = unref_entry["layer"].metadata.get("坐标系（假定）", "")
+    assert assumed and "未声明" in assumed
+    window.fit_current()
+    wait()
+    assert np.isfinite(window.selected()["frame"].data).any()
+    checks.append("map CRS options and file CRS import; unknown CRS assumed for display")
     broken = Path(directory)/"broken-input.tif"
     broken.write_bytes(b"\x00" * 512)
     assert not errors

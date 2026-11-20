@@ -354,6 +354,85 @@ class GeoIntegration(unittest.TestCase):
             (conda_proj/"proj.db").write_bytes(b"x")
             self.assertEqual(geoquickview._proj_data(conda.parent, conda), conda_proj)
 
+    def test_netcdf_without_extension_is_detected_by_content(self):
+        """WRF outputs often have no suffix; the content, not the name, decides."""
+        import shutil
+        from scipy.io import netcdf_file
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = create_samples(root)
+            hdf5 = root/"wrfout_like_file"
+            shutil.copy2(files["nc"], hdf5)
+            layer = inspect(hdf5)
+            self.assertEqual(layer.kind, "nc")
+            self.assertTrue(layer.choices)
+            frame = render(layer, target=layer.wkt, edge=64)
+            self.assertTrue(np.isfinite(frame.data).any())
+            classic = root/"classic_no_extension"
+            with netcdf_file(classic, "w", version=2) as ds:
+                ds.createDimension("lat", 4)
+                ds.createDimension("lon", 6)
+                for name, values, units in (("lat", np.arange(4), "degrees_north"),
+                                            ("lon", np.arange(6), "degrees_east")):
+                    coordinate = ds.createVariable(name, "f8", (name,))
+                    coordinate[:] = values
+                    coordinate.units = units
+                variable = ds.createVariable("temperature", "f4", ("lat", "lon"))
+                variable[:] = np.arange(24, dtype=np.float32).reshape(4, 6)
+                variable.units = "K"
+            layer3 = inspect(classic)
+            self.assertEqual(layer3.kind, "nc")
+            frame3 = render(layer3, target=layer3.wkt, edge=32)
+            self.assertTrue(np.isfinite(frame3.data).any())
+            self.assertEqual(frame3.unit, "K")
+
+    def test_wrf_grid_derived_from_global_attributes(self):
+        """WRF files without lat/lon variables are placed by MAP_PROJ/DX/DY/CEN_*."""
+        import h5netcdf
+        from geoquickview.data import crs_from_file
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/"wrfout_d01_2008-12-01_00_00_00"
+            data = np.arange(2*10*12, dtype=np.float32).reshape(2, 10, 12)
+            with h5netcdf.File(path, "w") as ds:
+                ds.attrs.update(TITLE=" OUTPUT FROM WRF V4.0 MODEL", MAP_PROJ=1,
+                                TRUELAT1=32.281, TRUELAT2=32.281, STAND_LON=103.865,
+                                CEN_LAT=30.276974, CEN_LON=106.41101, MOAD_CEN_LAT=30.276974,
+                                DX=11000.0, DY=11000.0)
+                ds.dimensions = {"Time": 2, "DateStrLen": 19, "south_north": 10, "west_east": 12}
+                times = ds.create_variable("Times", ("Time", "DateStrLen"), dtype="S1")
+                times[:] = np.array([list("2008-12-01_00:00:00"), list("2008-12-01_01:00:00")], dtype="S1")
+                var = ds.create_variable("T2", ("Time", "south_north", "west_east"),
+                                         dtype="f4", data=data)
+                var.attrs["units"] = "K"
+            layer = inspect(path)
+            self.assertEqual(layer.kind, "nc")
+            self.assertTrue(reference(layer.wkt).IsProjected())
+            self.assertIn("WRF", layer.metadata["定位状态"])
+            grid = grid_info(layer.path, "T2")
+            self.assertTrue(grid["wrf"])
+            self.assertEqual(len(grid["x"]), 12)
+            # The grid is regular in its own projection (11 km cells).
+            self.assertAlmostEqual(grid["dx"], 11000.0)
+            frame = render(layer, target=layer.wkt, edge=64)
+            self.assertTrue(np.isfinite(frame.data).any())
+            value = query(layer, layer.selection, float(grid["x"][6]), float(grid["y"][5]), layer.wkt)
+            self.assertEqual(value["原始列"], 6)
+            self.assertEqual(value["原始行"], 4)
+            self.assertAlmostEqual(value["物理值"], 4*12+6)
+            self.assertEqual(dimension_label(layer.path, "T2", "Time", 1), "2008-12-01_01:00:00")
+            self.assertTrue(reference(crs_from_file(path)).IsSame(reference(layer.wkt)))
+
+    def test_crs_from_file_reads_raster_and_vector(self):
+        from geoquickview.data import crs_from_file
+        raster = inspect(self.files["raster"])
+        self.assertTrue(reference(crs_from_file(self.files["raster"])).IsSame(reference(raster.wkt)))
+        for kind in ("gpkg", "shp"):
+            vector = inspect(self.files[kind])
+            if vector.wkt:
+                self.assertTrue(reference(crs_from_file(self.files[kind])).IsSame(reference(vector.wkt)))
+        with self.assertRaises(ValueError):
+            crs_from_file(self.root/"does-not-exist.tif")
+
     def test_non_ascii_runtime_path_does_not_break_proj_lookup(self):
         """PROJ cannot read proj.db through a non-ASCII path.
 

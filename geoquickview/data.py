@@ -148,11 +148,27 @@ def inspect(path):
         raise ValueError("文件格式无法识别或元数据编码无效；请确认这是有效的地理数据文件。") from None
 
 
+NETCDF3_SIGNATURE = b"CDF"
+HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
+
+
+def is_netcdf_file(path):
+    """Detect NetCDF by content, because WRF outputs often have no extension."""
+    try:
+        with Path(path).open("rb") as stream:
+            head = stream.read(8)
+    except OSError:
+        return False
+    return ((head[:3] == NETCDF3_SIGNATURE and head[3:4] in (b"\x01", b"\x02", b"\x05"))
+            or head.startswith(HDF5_SIGNATURE))
+
+
 def _inspect(path):
     path = str(Path(path).resolve())
     if not Path(path).is_file():
         raise ValueError("请选择存在的数据文件。")
-    if Path(path).suffix.lower() in (".nc", ".nc4", ".cdf"):
+    suffix = Path(path).suffix.lower()
+    if suffix in (".nc", ".nc4", ".cdf") or (not suffix and is_netcdf_file(path)):
         from .nc import inspect_nc
         return inspect_nc(path)
     vector = ogr.Open(path, 0) if gdal.IdentifyDriverEx(path, gdal.OF_VECTOR) else None
@@ -175,8 +191,17 @@ def _inspect(path):
         return Layer(path, "vector", Path(path).name, first["坐标系"], first["范围"],
                      {"文件": path, "主文件磁盘大小（字节）": Path(path).stat().st_size, "格式": vector.GetDriver().GetName(), "图层": metadata},
                      choices, {"layer": choices[0]})
-    ds = gdal.OpenEx(path, gdal.OF_RASTER | gdal.OF_READONLY)
+    try:
+        ds = gdal.OpenEx(path, gdal.OF_RASTER | gdal.OF_READONLY)
+    except Exception:
+        if is_netcdf_file(path):
+            from .nc import inspect_nc
+            return inspect_nc(path)
+        raise
     if ds is None or not ds.RasterCount:
+        if is_netcdf_file(path):
+            from .nc import inspect_nc
+            return inspect_nc(path)
         raise ValueError("此文件没有可读取的栅格波段或矢量图层。")
     gt = ds.GetGeoTransform(can_return_null=True)
     wkt = ds.GetProjection()
@@ -192,6 +217,40 @@ def _inspect(path):
     return Layer(path, "raster", Path(path).name, wkt, _raster_bounds(ds), metadata,
                  [f"{i}: {ds.GetRasterBand(i).GetDescription() or 'Band ' + str(i)}"
                   for i in range(1, ds.RasterCount + 1)], {"bands": [1]})
+
+
+def crs_from_file(path):
+    """Read the coordinate system of a raster, vector or NetCDF file.
+
+    Used by the map projection dialog so a projection can be taken from a
+    reference file instead of being typed by hand.
+    """
+    path = str(Path(path).resolve())
+    if not Path(path).is_file():
+        raise ValueError("请选择存在的文件。")
+    try:
+        ds = gdal.OpenEx(path, gdal.OF_RASTER | gdal.OF_READONLY)
+        if ds is not None:
+            wkt = ds.GetProjection()
+            if wkt:
+                return wkt
+    except Exception:
+        pass
+    try:
+        source = ogr.Open(path, 0)
+        if source is not None and source.GetLayerCount():
+            sr = source.GetLayerByIndex(0).GetSpatialRef()
+            if sr is not None and sr.ExportToWkt():
+                return sr.ExportToWkt()
+    except Exception:
+        pass
+    try:
+        layer = inspect(path)
+        if layer.wkt:
+            return layer.wkt
+    except Exception:
+        pass
+    raise ValueError("未能从该文件读取坐标系；请选择带坐标系（.prj / GeoTIFF / NetCDF）的栅格或矢量文件。")
 
 
 def layer_space(layer, selection=None):

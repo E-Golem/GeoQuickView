@@ -15,7 +15,8 @@ import pyqtgraph as pg
 from . import __version__
 
 from .data import (inspect, render, query, layer_space, change_extent, crs_name,
-                   reference, band_info, exact_statistics, reproject, Cancelled, coordinate_unit)
+                   reference, band_info, exact_statistics, reproject, Cancelled, coordinate_unit,
+                   crs_from_file)
 from .display import limits, rgba, geometry_parts
 
 REPOSITORY_URL = "https://github.com/E-Golem/GeoQuickView"
@@ -49,6 +50,82 @@ class Worker(QtCore.QRunnable):
             self.signals.error.emit(traceback.format_exc())
         finally:
             self.signals.finished.emit()
+
+
+class MapCrsDialog(W.QDialog):
+    """Pick a common projection, type a custom one, or read it from a file."""
+
+    def __init__(self, parent, current, basemap_wkt):
+        super().__init__(parent)
+        self.setWindowTitle("地图坐标系")
+        self.resize(640, 260)
+        layout = W.QVBoxLayout(self)
+        form = W.QFormLayout()
+        self.combo = W.QComboBox()
+        self.combo.setEditable(True)
+        for label, value in (
+            ("中国省界默认坐标系", basemap_wkt),
+            ("WGS 84 地理坐标 (EPSG:4326)", "EPSG:4326"),
+            ("Web Mercator (EPSG:3857)", "EPSG:3857"),
+            ("CGCS2000 地理坐标 (EPSG:4490)", "EPSG:4490"),
+            ("CGCS2000 / 3° 高斯-克吕格 CM 114E (EPSG:4547)", "EPSG:4547"),
+            ("WGS 84 / UTM 50N (EPSG:32650)", "EPSG:32650"),
+            ("WGS 84 / UTM 51N (EPSG:32651)", "EPSG:32651"),
+        ):
+            self.combo.addItem(label, value)
+        self.combo.setToolTip("可直接输入 EPSG 代码、PROJ 字符串或 WKT")
+        form.addRow("地图坐标系", self.combo)
+        self.current = W.QLabel("当前：" + current)
+        self.current.setWordWrap(True)
+        self.current.setObjectName("muted")
+        form.addRow(self.current)
+        self.preview = W.QLabel("")
+        self.preview.setWordWrap(True)
+        form.addRow(self.preview)
+        layout.addLayout(form)
+        buttons = W.QDialogButtonBox(W.QDialogButtonBox.StandardButton.Ok | W.QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        read = W.QPushButton("从文件读取坐标系…")
+        read.setToolTip("读取栅格、矢量（.prj）或 NetCDF 文件的坐标系作为地图坐标系")
+        read.clicked.connect(self.read_from_file)
+        row = W.QHBoxLayout()
+        row.addWidget(read)
+        row.addStretch()
+        row.addWidget(buttons)
+        layout.addLayout(row)
+        self.combo.currentIndexChanged.connect(self.refresh)
+        self.combo.editTextChanged.connect(self.refresh)
+        self.refresh()
+
+    def value(self):
+        text = self.combo.currentText().strip()
+        index = self.combo.currentIndex()
+        if index >= 0 and text == self.combo.itemText(index):
+            return self.combo.itemData(index) or text
+        return text
+
+    def refresh(self, *_):
+        try:
+            self.preview.setText("将使用：" + crs_name(self.value()))
+        except Exception as exc:
+            self.preview.setText("无法解析该坐标系：" + str(exc).splitlines()[-1])
+
+    def read_from_file(self):
+        path, _ = W.QFileDialog.getOpenFileName(
+            self, "选择带坐标系的文件", "",
+            "栅格/矢量/NetCDF (*.tif *.tiff *.img *.vrt *.shp *.gpkg *.geojson *.json *.nc *.nc4 *.cdf);;所有文件 (*)")
+        if not path:
+            return
+        try:
+            wkt = crs_from_file(path)
+        except Exception as exc:
+            W.QMessageBox.warning(self, "读取坐标系失败", str(exc))
+            return
+        label = f"来自文件：{Path(path).name}（{crs_name(wkt)}）"
+        self.combo.addItem(label, wkt)
+        self.combo.setCurrentIndex(self.combo.count()-1)
+        self.refresh()
 
 
 class MainWindow(W.QMainWindow):
@@ -466,7 +543,8 @@ class MainWindow(W.QMainWindow):
 
     def choose_files(self):
         paths, _ = W.QFileDialog.getOpenFileNames(self, "打开地理数据", "",
-            "地理数据 (*.tif *.tiff *.nc *.nc4 *.cdf *.shp *.geojson *.json *.gpkg *.vrt *.img *.jp2 *.hdf *.h5);;所有文件 (*)")
+            "地理数据 (*.tif *.tiff *.nc *.nc4 *.cdf *.shp *.geojson *.json *.gpkg *.vrt *.img *.jp2 *.hdf *.h5);;"
+            "所有文件（含无后缀的 WRF/NetCDF） (*)")
         for path in paths:
             self.open_path(path)
 
@@ -482,7 +560,20 @@ class MainWindow(W.QMainWindow):
                 self.open_path(files[kind])
         self.run_job(lambda *_: create_samples(self.demo_directory.name), ready, "正在创建合成演示数据…")
 
+    def assumed_crs(self, layer):
+        """Default CRS for files that declare none: geographic if plausible, else the province basemap."""
+        bounds = layer.extent
+        if bounds and -180 <= bounds[0] and bounds[2] <= 360 and -90 <= bounds[1] and bounds[3] <= 90:
+            return reference("EPSG:4326").ExportToWkt()
+        return self.basemap.wkt
+
     def add_layer(self, layer):
+        assumed_note = ""
+        if not layer.wkt and layer.extent and not layer.metadata.get("索引坐标"):
+            assumed = self.assumed_crs(layer)
+            layer.wkt = assumed
+            layer.metadata["坐标系（假定）"] = crs_name(assumed) + "（原文件未声明坐标系）"
+            assumed_note = "坐标系未知，已按" + crs_name(assumed) + "假定显示"
         key = id(layer)
         entry = {"key": key, "layer": layer, "selection": deepcopy(layer.selection),
                  "style": {"cmap": "viridis", "lower": None, "upper": None, "opacity": 1., "line": "#d88720"},
@@ -502,7 +593,9 @@ class MainWindow(W.QMainWindow):
             self.target = layer.wkt
             self.fit_current()
         self.crs_label.setText("地图视图 · "+crs_name(self.target))
-        self.status.showMessage(f"已打开 {layer.name}", 5000)
+        self.status.showMessage(f"已打开 {layer.name}" + (f"（{assumed_note}）" if assumed_note else ""), 6000)
+        if assumed_note:
+            self.map_note.setText(assumed_note + "；可用“地图坐标系…”修正")
         self.request_render()
 
     def populate_selection(self):
@@ -816,30 +909,35 @@ class MainWindow(W.QMainWindow):
             self.basemap_items.append(item)
 
     def choose_crs(self):
-        value, accepted = W.QInputDialog.getText(self, "地图坐标系", "输入 EPSG 代码、PROJ 定义或 WKT：",
-                                                 text="EPSG:4326")
-        if accepted and value:
-            try:
-                candidate = reference(value).ExportToWkt()
-                entry = self.selected()
-                if entry:
-                    source, bounds = layer_space(entry["layer"], entry["selection"])
-                    if not source or bounds is None:
-                        raise ValueError("当前图层的空间参照未知，无法转换地图坐标系。")
-                    change_extent(bounds, source, candidate)
-                elif self.basemap_enabled.isChecked():
-                    change_extent(self.basemap.extent, self.basemap.wkt, candidate)
-                self.target = candidate
-                self.crs_label.setText("地图视图 · "+crs_name(self.target))
-                if entry:
-                    self.fit_current()
-                else:
-                    bounds = change_extent(self.basemap.extent, self.basemap.wkt, candidate)
-                    self.update_zoom_limits(bounds)
-                    self.canvas.setRange(xRange=(bounds[0], bounds[2]), yRange=(bounds[1], bounds[3]), padding=.025)
-                    self.request_render()
-            except Exception as exc:
-                self.show_error(str(exc))
+        dialog = MapCrsDialog(self, crs_name(self.target), self.basemap.wkt)
+        if dialog.exec() == W.QDialog.DialogCode.Accepted:
+            self.apply_map_crs(dialog.value())
+
+    def apply_map_crs(self, value):
+        """Validate and switch the map CRS; returns True when it was applied."""
+        try:
+            candidate = reference(value).ExportToWkt()
+            entry = self.selected()
+            if entry:
+                source, bounds = layer_space(entry["layer"], entry["selection"])
+                if not source or bounds is None:
+                    raise ValueError("当前图层的空间参照未知，无法转换地图坐标系。")
+                change_extent(bounds, source, candidate)
+            elif self.basemap_enabled.isChecked():
+                change_extent(self.basemap.extent, self.basemap.wkt, candidate)
+            self.target = candidate
+            self.crs_label.setText("地图视图 · "+crs_name(self.target))
+            if entry:
+                self.fit_current()
+            else:
+                bounds = change_extent(self.basemap.extent, self.basemap.wkt, candidate)
+                self.update_zoom_limits(bounds)
+                self.canvas.setRange(xRange=(bounds[0], bounds[2]), yRange=(bounds[1], bounds[3]), padding=.025)
+                self.request_render()
+            return True
+        except Exception as exc:
+            self.show_error(str(exc))
+            return False
 
     def is_visible(self, entry):
         """Identity check: entry dicts contain arrays and must not be compared by value."""

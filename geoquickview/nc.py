@@ -19,18 +19,92 @@ def dataset(path, raw=False):
 
 
 def _axis(ds, var, which):
-    aliases = ("lon", "longitude", "x") if which == "x" else ("lat", "latitude", "y")
+    aliases = ("lon", "longitude", "x", "xlong") if which == "x" else ("lat", "latitude", "y", "xlat")
     standards = ("longitude", "projection_x_coordinate") if which == "x" else ("latitude", "projection_y_coordinate")
+    units = ("degrees_east", "degree_east") if which == "x" else ("degrees_north", "degree_north")
     for name in list(var.coords) + list(var.dims):
         if name not in ds:
             continue
         coord = ds[name]
-        if name.lower() in aliases or coord.attrs.get("axis", "").lower() == which or coord.attrs.get("standard_name") in standards:
-            if coord.ndim != 1:
-                raise ValueError("当前变量使用曲线/非结构坐标；可查看属性，首版地图预览需要规则的一维坐标。")
-            if coord.dims[0] in var.dims:
-                return name, coord.dims[0]
+        if coord.ndim > 3:
+            continue
+        if (name.lower() in aliases or coord.attrs.get("axis", "").lower() == which
+                or coord.attrs.get("standard_name") in standards
+                or coord.attrs.get("units", "").lower() in units):
+            if coord.ndim == 1:
+                if coord.dims[0] in var.dims:
+                    return name, coord.dims[0]
+            elif coord.ndim == 2 and all(dim in var.dims for dim in coord.dims):
+                return name, coord.dims[-1 if which == "x" else -2]
+            elif coord.ndim == 3 and all(dim in var.dims for dim in coord.dims[1:]):
+                return name, coord.dims[-1 if which == "x" else -2]
     return None, var.dims[-1 if which == "x" else -2]
+
+
+def _plane(coord):
+    """Drop leading non-spatial dimensions (WRF often stores XLAT as Time,Y,X)."""
+    values = coord
+    for dim in coord.dims[:-2]:
+        values = values.isel({dim: 0})
+    return np.asarray(values.values, dtype=float)
+
+
+WRF_EARTH_RADIUS = 6370000.0
+
+
+def _wrf_grid(ds, var, xd, yd):
+    """Reconstruct the grid of a WRF output from its global attributes.
+
+    WRF files usually carry no coordinate variables; the grid is regular in the
+    WRF map projection (MAP_PROJ) and its origin follows from the domain centre
+    plus DX/DY. Returns (x, y, wkt, note) or None when the file is not WRF.
+    """
+    attrs = ds.attrs
+    required = ("MAP_PROJ", "DX", "DY", "CEN_LAT", "CEN_LON")
+    if any(key not in attrs for key in required):
+        return None
+    try:
+        projection = int(attrs["MAP_PROJ"])
+        dx, dy = float(attrs["DX"]), float(attrs["DY"])
+        nx, ny = var.sizes[xd], var.sizes[yd]
+        centre = (float(attrs["CEN_LON"]), float(attrs["CEN_LAT"]))
+    except (TypeError, ValueError):
+        return None
+    if nx < 2 or ny < 2:
+        return None
+    if projection in (0, 6):  # regular latitude/longitude grid, DX/DY in degrees
+        wkt = reference("EPSG:4326").ExportToWkt()
+        x = centre[0] - (nx-1)*dx/2 + np.arange(nx)*dx
+        y = centre[1] - (ny-1)*dy/2 + np.arange(ny)*dy
+        return x, y, wkt, "WRF 经纬度网格（由全局属性推导）"
+    templates = {
+        1: "+proj=lcc +lat_1={TRUELAT1} +lat_2={TRUELAT2} +lat_0={MOAD_CEN_LAT} +lon_0={STAND_LON}",
+        2: "+proj=stere +lat_0={pole}90 +lat_ts={TRUELAT1} +lon_0={STAND_LON}",
+        3: "+proj=merc +lat_ts={TRUELAT1} +lon_0={STAND_LON}",
+    }
+    template = templates.get(projection)
+    if template is None:
+        return None
+    values = {"TRUELAT1": attrs.get("TRUELAT1"), "TRUELAT2": attrs.get("TRUELAT2"),
+              "STAND_LON": attrs.get("STAND_LON"), "MOAD_CEN_LAT": attrs.get("MOAD_CEN_LAT")}
+    if any(values[key] is None for key in ("TRUELAT1", "STAND_LON")):
+        return None
+    values["TRUELAT2"] = values["TRUELAT1"] if values["TRUELAT2"] is None else values["TRUELAT2"]
+    values["MOAD_CEN_LAT"] = centre[1] if values["MOAD_CEN_LAT"] is None else values["MOAD_CEN_LAT"]
+    values = {key: float(value) for key, value in values.items()}
+    values["pole"] = "-" if values["TRUELAT1"] < 0 else ""
+    try:
+        from pyproj import CRS, Transformer
+        crs = CRS.from_proj4(template.format(**values) +
+                             f" +x_0=0 +y_0=0 +a={WRF_EARTH_RADIUS} +b={WRF_EARTH_RADIUS} +units=m +no_defs")
+        transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+        cx, cy = transformer.transform(centre[0], centre[1])
+        wkt = reference(crs.to_wkt()).ExportToWkt()
+    except Exception:
+        return None
+    x = cx - (nx-1)*dx/2 + np.arange(nx)*dx
+    y = cy - (ny-1)*dy/2 + np.arange(ny)*dy
+    return x, y, wkt, "WRF 网格（坐标系与范围由全局属性推导）"
 
 
 def _ordered(values, ascending):
@@ -81,8 +155,6 @@ def _grid(ds, variable):
     yn, yd = _axis(ds, var, "y")
     if xd == yd or len(var.dims) < 2:
         raise ValueError("无法识别两个不同的空间维度。")
-    x = np.asarray(ds[xn].values, dtype=float) if xn else np.arange(var.sizes[xd], dtype=float)
-    y = np.asarray(ds[yn].values, dtype=float) if yn else -np.arange(var.sizes[yd], dtype=float)
     wkt = ""
     mapping = var.attrs.get("grid_mapping", "")
     if mapping in ds:
@@ -93,13 +165,34 @@ def _grid(ds, variable):
         elif "grid_mapping_name" in attrs:
             from pyproj import CRS
             wkt = CRS.from_cf(attrs).to_wkt()
-    longitude = bool(xn and (xn.lower() in ("lon", "longitude") or ds[xn].attrs.get("standard_name") == "longitude"
-                             or "degrees_east" in ds[xn].attrs.get("units", "").lower()))
-    latitude = bool(yn and (yn.lower() in ("lat", "latitude") or ds[yn].attrs.get("standard_name") == "latitude"
-                            or "degrees_north" in ds[yn].attrs.get("units", "").lower()))
-    if longitude and latitude:
+    wrf = _wrf_grid(ds, var, xd, yd)
+    curvilinear = bool(xn and yn and (ds[xn].ndim >= 2 or ds[yn].ndim >= 2)) and wrf is None
+    if wrf is not None:
+        x, y, wkt, note = wrf
+    elif curvilinear:
+        # WRF-style 2-D latitude/longitude: approximate the grid by its middle
+        # row/column so the overall field can still be placed on a map.
+        lon, lat = _plane(ds[xn]), _plane(ds[yn])
+        ny, nx = var.sizes[yd], var.sizes[xd]
+        if lon.shape == (nx, ny) and lat.shape == (nx, ny):
+            lon, lat = lon.T, lat.T
+        if lon.shape != (ny, nx) or lat.shape != (ny, nx):
+            raise ValueError("二维经纬度坐标与变量网格不匹配，无法定位。")
+        x = lon[ny//2, :]
+        y = lat[:, nx//2]
         wkt = wkt or reference("EPSG:4326").ExportToWkt()
-        x = (x + 180) % 360 - 180
+        note = "曲线网格（二维经纬度）：按中心行/列近似定位预览"
+    else:
+        x = np.asarray(ds[xn].values, dtype=float) if xn else np.arange(var.sizes[xd], dtype=float)
+        y = np.asarray(ds[yn].values, dtype=float) if yn else -np.arange(var.sizes[yd], dtype=float)
+        note = ""
+        longitude = bool(xn and (xn.lower() in ("lon", "longitude") or ds[xn].attrs.get("standard_name") == "longitude"
+                                 or "degrees_east" in ds[xn].attrs.get("units", "").lower()))
+        latitude = bool(yn and (yn.lower() in ("lat", "latitude") or ds[yn].attrs.get("standard_name") == "latitude"
+                                or "degrees_north" in ds[yn].attrs.get("units", "").lower()))
+        if longitude and latitude:
+            wkt = wkt or reference("EPSG:4326").ExportToWkt()
+            x = (x + 180) % 360 - 180
     if not np.isfinite(x).all() or not np.isfinite(y).all():
         raise ValueError("空间坐标包含无效值。")
     x_total, y_total = len(x), len(y)
@@ -112,6 +205,10 @@ def _grid(ds, variable):
     return {"x": x, "y": y, "xo": xo, "yo": yo, "xd": xd, "yd": yd, "dx": dx, "dy": dy,
             "rx": rx, "ry": ry, "rxi": rxi, "ryi": ryi,
             "regular": x_regular and y_regular,
+            "approximated": curvilinear,
+            "wrf": wrf is not None,
+            "index_coordinates": not (xn and yn) and wrf is None,
+            "note": note,
             "merged": len(x) != x_total or len(y) != y_total,
             "wkt": wkt, "extent": (rx[0]-dx/2, ry[-1]-dy/2, rx[-1]+dx/2, ry[0]+dy/2),
             "extra": {d: var.sizes[d] for d in var.dims if d not in (xd, yd)}}
@@ -146,7 +243,11 @@ def inspect_nc(path):
                 raise ValueError("没有二维数值变量，当前仅查看属性。")
             grid = _grid(ds, selection["variable"])
             wkt, extent = grid["wkt"], grid["extent"]
-            if not grid["regular"]:
+            if grid.get("wrf"):
+                metadata["定位状态"] = "WRF 网格：坐标系与范围由全局属性（MAP_PROJ/DX/DY/CEN_LAT/CEN_LON）推导"
+            elif grid.get("approximated"):
+                metadata["定位状态"] = "曲线网格：预览按中心行/列近似定位；查询与统计使用该近似网格"
+            elif not grid["regular"]:
                 metadata["定位状态"] = "非均匀网格：预览按等间距近似显示，像元查询与统计使用原始坐标"
             elif wkt:
                 metadata["定位状态"] = "规则网格"
@@ -154,6 +255,10 @@ def inspect_nc(path):
                 metadata["定位状态"] = "空间参照未知，使用原坐标/数组坐标"
             if grid["merged"]:
                 metadata["网格说明"] = "已合并重复的经度/纬度端点后再定位"
+            elif grid.get("note"):
+                metadata["网格说明"] = grid["note"]
+            if grid.get("index_coordinates"):
+                metadata["索引坐标"] = "是（没有经纬度或投影坐标变量，不能与地理底图叠加）"
         except ValueError as exc:
             wkt, extent = "", None
             metadata["定位状态"] = str(exc)
@@ -220,6 +325,21 @@ def render_nc(layer, selection, target, extent, edge, cancel=None):
 def dimension_label(path, variable, dim, index):
     with dataset(path, raw=True) as ds:
         if dim not in ds:
+            # WRF stores its timestamps in a Times(Time, 19) character array
+            # instead of a Time coordinate variable.
+            if dim.lower() == "time" and "Times" in ds:
+                values = np.asarray(ds["Times"].values)
+                if values.ndim >= 1 and 0 <= index < len(values):
+                    row = np.asarray(values[index]).ravel()
+                    if row.dtype.kind == "S":
+                        text = b"".join(row.tolist()).decode("utf-8", "replace")
+                    elif row.dtype.kind == "U":
+                        text = "".join(row.tolist())
+                    else:
+                        text = "".join(chr(int(code)) for code in row if int(code))
+                    text = text.replace("\x00", "").strip()
+                    if text:
+                        return text
             return str(index)
         coordinate = ds[dim]
         value = coordinate.isel({dim: index}).item()
@@ -283,6 +403,8 @@ def statistics_nc(layer, selection, cancel=None, progress=None):
 
 def materialize_nc(layer, selection, path, cancel=None):
     grid = grid_info(layer.path, selection["variable"])
+    if grid.get("approximated"):
+        raise ValueError("曲线网格仅支持预览、查询与统计；重投影会改变像元定位。")
     if not grid["regular"]:
         raise ValueError("当前变量坐标不是均匀网格，重投影会改变像元定位；预览、查询与统计仍可使用。")
     ds = gdal.GetDriverByName("GTiff").Create(str(path), len(grid["x"]), len(grid["y"]), 1,
